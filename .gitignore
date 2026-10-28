@@ -1,0 +1,7 @@
+/target
+packaging/rpmbuild
+*.rpm
+**/*.rs.bk
+.idea
+.vscode
+*.log

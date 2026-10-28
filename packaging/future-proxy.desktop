@@ -1,0 +1,13 @@
+[Desktop Entry]
+Name=Future Proxy
+Name[zh_CN]=Future Proxy
+GenericName=Proxy Client
+Comment=Ultra-lightweight Native GUI Proxy Client
+Exec=/usr/bin/future-proxy
+Icon=future-proxy
+Terminal=false
+Type=Application
+Categories=Network;System;
+StartupNotify=true
+StartupWMClass=future-proxy
+Keywords=proxy;clash;mihomo;vpn;tun;
