@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+PORT="${FUTURE_PROXY_PORT:-7890}"
+on() {
+  kwriteconfig6 --file kioslaverc --group "Proxy Settings" --key httpProxy "http://127.0.0.1:${PORT}"
+  kwriteconfig6 --file kioslaverc --group "Proxy Settings" --key httpsProxy "http://127.0.0.1:${PORT}"
+  kwriteconfig6 --file kioslaverc --group "Proxy Settings" --key socksProxy "socks://127.0.0.1:${PORT}"
+  kwriteconfig6 --file kioslaverc --group "Proxy Settings" --key NoProxyFor "localhost,127.0.0.1,::1,192.168.0.0/16,10.0.0.0/8,172.16.0.0/12"
+  kwriteconfig6 --file kioslaverc --group "Proxy Settings" --key ProxyType 1
+  dbus-send --type=signal /KIO/Scheduler org.kde.KIO.Scheduler.reparseSlaveConfiguration string: >/dev/null 2>&1 || true
+}
+off() {
+  kwriteconfig6 --file kioslaverc --group "Proxy Settings" --key ProxyType 0
+  dbus-send --type=signal /KIO/Scheduler org.kde.KIO.Scheduler.reparseSlaveConfiguration string: >/dev/null 2>&1 || true
+}
+case "${1:-}" in
+  on) on ;;
+  off) off ;;
+  status)
+    echo -n "ProxyType="; kreadconfig6 --file kioslaverc --group "Proxy Settings" --key ProxyType
+    ;;
+  *) echo "usage: $0 on|off|status"; exit 2 ;;
+esac
