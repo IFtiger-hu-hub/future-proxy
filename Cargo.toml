@@ -1,6 +1,6 @@
 [package]
 name = "future-proxy"
-version = "1.0.1"
+version = "1.0.2"
 edition = "2021"
 
 [dependencies]
@@ -11,3 +11,4 @@ serde_json = "1.0"
 dirs = "5.0"
 regex = "1.10"
 url = "2.5"
+ksni = { version = "0.3", default-features = false, features = ["blocking", "async-io"] }

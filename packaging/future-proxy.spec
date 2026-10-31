@@ -3,7 +3,7 @@
 %undefine _missing_build_ids_terminate_build
 
 Name:           future-proxy
-Version:        1.0.1
+Version:        1.0.2
 Release:        1%{?dist}
 Summary:        Ultra-lightweight Native GUI Proxy Client (Future Proxy)
 License:        GPL-3.0

@@ -24,7 +24,7 @@ cp "$DIR"/future-proxy.spec rpmbuild/SPECS/
 echo "=== 4. 执行 rpmbuild 构建 ==="
 rpmbuild --define "_topdir $DIR/rpmbuild" -ba rpmbuild/SPECS/future-proxy.spec
 
-RPM_PATH=$(find "$DIR/rpmbuild/RPMS" -name "future-proxy-*.rpm" | head -n 1)
+RPM_PATH=$(find "$DIR/rpmbuild/RPMS" -name "future-proxy-*.rpm" | sort -V | tail -n 1)
 cp "$RPM_PATH" "$PROJECT_ROOT/"
 
 echo ""

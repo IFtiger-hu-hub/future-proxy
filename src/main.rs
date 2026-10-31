@@ -7,6 +7,69 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use ksni::blocking::TrayMethods;
+
+struct TrayFlags {
+    show: AtomicBool,
+    quit: AtomicBool,
+}
+
+struct ProxyTray {
+    flags: Arc<TrayFlags>,
+    ctx: egui::Context,
+}
+
+impl ksni::Tray for ProxyTray {
+    fn id(&self) -> String {
+        "future-proxy".into()
+    }
+    fn icon_name(&self) -> String {
+        "future-proxy".into()
+    }
+    fn title(&self) -> String {
+        "Future Proxy".into()
+    }
+    fn tool_tip(&self) -> ksni::ToolTip {
+        ksni::ToolTip {
+            icon_name: "future-proxy".into(),
+            title: "Future Proxy".into(),
+            description: "点击打开界面".into(),
+            ..Default::default()
+        }
+    }
+    fn activate(&mut self, _x: i32, _y: i32) {
+        self.flags.show.store(true, Ordering::SeqCst);
+        self.ctx.request_repaint();
+    }
+    fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
+        use ksni::menu::*;
+        vec![
+            StandardItem {
+                label: "打开界面".into(),
+                activate: Box::new(|this: &mut Self| {
+                    this.flags.show.store(true, Ordering::SeqCst);
+                    this.ctx.request_repaint();
+                }),
+                ..Default::default()
+            }
+            .into(),
+            MenuItem::Separator,
+            StandardItem {
+                label: "退出".into(),
+                icon_name: "application-exit".into(),
+                activate: Box::new(|this: &mut Self| {
+                    this.flags.quit.store(true, Ordering::SeqCst);
+                    this.ctx.request_repaint();
+                }),
+                ..Default::default()
+            }
+            .into(),
+        ]
+    }
+}
+
+
 const DEFAULT_SECRET: &str = "future-proxy-secret";
 const API_HOST: &str = "127.0.0.1:9090";
 const MIXED_PORT: u16 = 7890;
@@ -792,6 +855,9 @@ pub struct FutureProxyApp {
     state: Arc<Mutex<AppState>>,
     core: Arc<Mutex<CoreManager>>,
     ctx: egui::Context,
+    tray_flags: Arc<TrayFlags>,
+    _tray: Option<ksni::blocking::Handle<ProxyTray>>,
+    force_quit: bool,
 }
 
 impl FutureProxyApp {
@@ -987,7 +1053,26 @@ impl FutureProxyApp {
             });
         }
 
-        Self { state, core, ctx }
+        let tray_flags = Arc::new(TrayFlags {
+            show: AtomicBool::new(false),
+            quit: AtomicBool::new(false),
+        });
+        let tray_handle = ProxyTray {
+            flags: Arc::clone(&tray_flags),
+            ctx: ctx.clone(),
+        }
+        .spawn()
+        .map_err(|e| eprintln!("托盘启动失败: {e}"))
+        .ok();
+
+        Self {
+            state,
+            core,
+            ctx,
+            tray_flags,
+            _tray: tray_handle,
+            force_quit: false,
+        }
     }
 
     fn set_status(&self, msg: String) {
@@ -1164,6 +1249,21 @@ fn chrono_like_now() -> String {
 
 impl eframe::App for FutureProxyApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.tray_flags.quit.swap(false, Ordering::SeqCst) {
+            self.force_quit = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+        if self.tray_flags.show.swap(false, Ordering::SeqCst) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        }
+        if ctx.input(|i| i.viewport().close_requested()) && !self.force_quit {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        }
+
         let mut action_switch_sub = None;
         let mut action_update_sub = None;
         let mut action_ping = false;
