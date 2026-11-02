@@ -1,3 +1,5 @@
+#![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
+
 use eframe::egui;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -9,10 +11,24 @@ use std::time::{Duration, Instant};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Condvar;
-use std::os::unix::net::{UnixListener, UnixStream};
+
+#[cfg(unix)]
 use ksni::blocking::TrayMethods;
+#[cfg(unix)]
+use std::os::unix::net::{UnixListener, UnixStream};
+
+#[cfg(unix)]
+type IpcListener = UnixListener;
+#[cfg(windows)]
+type IpcListener = std::net::TcpListener;
+
+#[cfg(windows)]
+const WIN_IPC_ADDR: &str = "127.0.0.1:19091";
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// Path for the single-instance Unix socket (under XDG_RUNTIME_DIR when available).
+#[cfg(unix)]
 fn ui_sock_path() -> PathBuf {
     let dir = std::env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
@@ -24,6 +40,7 @@ fn ui_sock_path() -> PathBuf {
     dir.join("future-proxy-ui.sock")
 }
 
+#[cfg(unix)]
 fn nix_uid_fallback() -> u32 {
     // Avoid depending on the libc crate; read from /proc.
     std::fs::read_to_string("/proc/self/loginuid")
@@ -35,7 +52,8 @@ fn nix_uid_fallback() -> u32 {
 /// Become the sole UI/tray process, or hand off to the existing one.
 /// - `activate_if_running`: desktop/dock launch should SHOW the existing instance.
 /// - `--tray` relaunch should NOT activate (avoids opening GUI just because a tray already exists).
-fn take_single_instance(activate_if_running: bool) -> Option<UnixListener> {
+#[cfg(unix)]
+fn take_single_instance(activate_if_running: bool) -> Option<IpcListener> {
     let path = ui_sock_path();
     // Live peer?
     if let Ok(mut stream) = UnixStream::connect(&path) {
@@ -48,12 +66,8 @@ fn take_single_instance(activate_if_running: bool) -> Option<UnixListener> {
     let _ = std::fs::remove_file(&path);
     match UnixListener::bind(&path) {
         Ok(listener) => {
-            // Best-effort private sock (same uid session).
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
-            }
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
             Some(listener)
         }
         Err(_) => {
@@ -71,9 +85,32 @@ fn take_single_instance(activate_if_running: bool) -> Option<UnixListener> {
     }
 }
 
+#[cfg(windows)]
+fn take_single_instance(activate_if_running: bool) -> Option<IpcListener> {
+    use std::net::{SocketAddr, TcpListener, TcpStream};
+    let addr: SocketAddr = WIN_IPC_ADDR.parse().unwrap();
+    if let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(180)) {
+        if activate_if_running {
+            let _ = stream.write_all(b"SHOW\n");
+        }
+        return None;
+    }
+    match TcpListener::bind(addr) {
+        Ok(listener) => Some(listener),
+        Err(_) => {
+            if let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(180)) {
+                if activate_if_running {
+                    let _ = stream.write_all(b"SHOW\n");
+                }
+            }
+            None
+        }
+    }
+}
+
 /// Accept SHOW commands from second Exec launches; sets the same flags as tray Activate.
 fn spawn_ipc_listener(
-    listener_slot: Arc<Mutex<Option<UnixListener>>>,
+    listener_slot: Arc<Mutex<Option<IpcListener>>>,
     flags: Arc<TrayFlags>,
     wake: Arc<Condvar>,
     egui_ctx: Arc<Mutex<Option<egui::Context>>>,
@@ -108,10 +145,13 @@ fn spawn_ipc_listener(
     });
 }
 
-fn release_instance(listener_slot: &Mutex<Option<UnixListener>>) {
+fn release_instance(listener_slot: &Mutex<Option<IpcListener>>) {
     *listener_slot.lock().unwrap() = None;
-    // Unlink sock path so the replacement process can bind immediately.
-    let _ = std::fs::remove_file(ui_sock_path());
+    #[cfg(unix)]
+    {
+        // Unlink sock path so the replacement process can bind immediately.
+        let _ = std::fs::remove_file(ui_sock_path());
+    }
     // Brief pause so the accept thread notices the cleared slot.
     std::thread::sleep(Duration::from_millis(50));
 }
@@ -131,12 +171,60 @@ fn tray_notify(_flags: &TrayFlags, wake: &Condvar, egui_ctx: &Mutex<Option<egui:
     }
 }
 
+/// Generate a crisp 32x32 RGBA icon (Cupertino Blue rounded square with white lightning bolt).
+fn build_brand_rgba_icon() -> (Vec<u8>, u32, u32) {
+    let w = 32usize;
+    let h = 32usize;
+    let mut rgba = vec![0u8; w * h * 4];
+    for y in 0..h {
+        for x in 0..w {
+            let fx = x as f32 + 0.5;
+            let fy = y as f32 + 0.5;
+            // Signed distance to rounded rect [2..30, 2..30] with radius 7.0
+            let qx = (fx - 16.0).abs() - 7.0;
+            let qy = (fy - 16.0).abs() - 7.0;
+            let dist = (qx.max(0.0).hypot(qy.max(0.0)) + qx.min(qy).max(0.0)) - 7.0;
+            if dist <= 0.5 {
+                let alpha = ((0.5 - dist).clamp(0.0, 1.0) * 255.0) as u8;
+                // Check if inside lightning bolt polygon
+                let in_upper = fy >= 6.5 && fy <= 17.5 && {
+                    let t = (fy - 6.5) / 11.0;
+                    let left_x = 18.5 - t * 8.5;
+                    let right_x = 18.5 - t * 2.5;
+                    fx >= left_x && fx <= right_x
+                };
+                let in_lower = fy >= 14.5 && fy <= 25.5 && {
+                    let t = (fy - 14.5) / 11.0;
+                    let left_x = 16.0 - t * 2.5;
+                    let right_x = 22.0 - t * 8.5;
+                    fx >= left_x && fx <= right_x
+                };
+                let idx = (y * w + x) * 4;
+                if in_upper || in_lower {
+                    rgba[idx] = 255;
+                    rgba[idx + 1] = 255;
+                    rgba[idx + 2] = 255;
+                    rgba[idx + 3] = alpha;
+                } else {
+                    rgba[idx] = 10;
+                    rgba[idx + 1] = 132;
+                    rgba[idx + 2] = 255;
+                    rgba[idx + 3] = alpha;
+                }
+            }
+        }
+    }
+    (rgba, w as u32, h as u32)
+}
+
+#[cfg(unix)]
 struct ProxyTray {
     flags: Arc<TrayFlags>,
     wake: Arc<Condvar>,
     egui_ctx: Arc<Mutex<Option<egui::Context>>>,
 }
 
+#[cfg(unix)]
 impl ksni::Tray for ProxyTray {
     fn id(&self) -> String {
         "future-proxy".into()
@@ -184,6 +272,524 @@ impl ksni::Tray for ProxyTray {
             .into(),
         ]
     }
+}
+
+#[cfg(unix)]
+type TrayGuard = Option<ksni::blocking::Handle<ProxyTray>>;
+#[cfg(windows)]
+type TrayGuard = ();
+
+#[cfg(unix)]
+fn spawn_system_tray(
+    flags: Arc<TrayFlags>,
+    wake: Arc<Condvar>,
+    egui_ctx: Arc<Mutex<Option<egui::Context>>>,
+) -> TrayGuard {
+    ProxyTray {
+        flags,
+        wake,
+        egui_ctx,
+    }
+    .spawn()
+    .map_err(|e| eprintln!("托盘启动失败: {e}"))
+    .ok()
+}
+
+#[cfg(windows)]
+mod win_os {
+    use super::*;
+
+    const WM_USER: u32 = 0x0400;
+    const WM_TRAYICON: u32 = WM_USER + 1;
+    const WM_LBUTTONUP: u32 = 0x0202;
+    const WM_LBUTTONDBLCLK: u32 = 0x0203;
+    const WM_RBUTTONUP: u32 = 0x0205;
+    const WM_CONTEXTMENU: u32 = 0x007B;
+    const NIM_ADD: u32 = 0x0000_0000;
+    const NIM_DELETE: u32 = 0x0000_0002;
+    const NIF_MESSAGE: u32 = 0x0000_0001;
+    const NIF_ICON: u32 = 0x0000_0002;
+    const NIF_TIP: u32 = 0x0000_0004;
+    const MF_STRING: u32 = 0x0000_0000;
+    const MF_SEPARATOR: u32 = 0x0000_0800;
+    const TPM_RIGHTBUTTON: u32 = 0x0002;
+    const TPM_NONOTIFY: u32 = 0x0080;
+    const TPM_RETURNCMD: u32 = 0x0100;
+    const PM_REMOVE: u32 = 0x0001;
+    const GWLP_USERDATA: i32 = -21;
+
+    const HKEY_CURRENT_USER: isize = -2147483647i32 as isize; // 0x80000001
+    const KEY_READ: u32 = 0x20019;
+    const KEY_WRITE: u32 = 0x20006;
+    const REG_SZ: u32 = 1;
+    const REG_DWORD: u32 = 4;
+    const INTERNET_OPTION_SETTINGS_CHANGED: u32 = 39;
+    const INTERNET_OPTION_REFRESH: u32 = 37;
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+
+    #[repr(C)]
+    struct POINT {
+        x: i32,
+        y: i32,
+    }
+
+    #[repr(C)]
+    struct MSG {
+        hwnd: isize,
+        message: u32,
+        w_param: usize,
+        l_param: isize,
+        time: u32,
+        pt: POINT,
+    }
+
+    #[repr(C)]
+    struct WNDCLASSW {
+        style: u32,
+        lpfn_wnd_proc: Option<unsafe extern "system" fn(isize, u32, usize, isize) -> isize>,
+        cb_cls_extra: i32,
+        cb_wnd_extra: i32,
+        h_instance: isize,
+        h_icon: isize,
+        h_cursor: isize,
+        hbr_background: isize,
+        lpsz_menu_name: *const u16,
+        lpsz_class_name: *const u16,
+    }
+
+    #[repr(C)]
+    struct NOTIFYICONDATAW {
+        cb_size: u32,
+        hwnd: isize,
+        u_id: u32,
+        u_flags: u32,
+        u_callback_message: u32,
+        h_icon: isize,
+        sz_tip: [u16; 128],
+        dw_state: u32,
+        dw_state_mask: u32,
+        sz_info: [u16; 256],
+        u_timeout_or_version: u32,
+        sz_info_title: [u16; 64],
+        dw_info_flags: u32,
+        guid_item: [u32; 4],
+        h_balloon_icon: isize,
+    }
+
+    #[repr(C)]
+    struct PROCESS_MEMORY_COUNTERS {
+        cb: u32,
+        page_fault_count: u32,
+        peak_working_set_size: usize,
+        working_set_size: usize,
+        quota_peak_paged_pool_usage: usize,
+        quota_paged_pool_usage: usize,
+        quota_peak_non_paged_pool_usage: usize,
+        quota_non_paged_pool_usage: usize,
+        pagefile_usage: usize,
+        peak_pagefile_usage: usize,
+    }
+
+    #[link(name = "user32")]
+    extern "system" {
+        fn RegisterClassW(lp_wnd_class: *const WNDCLASSW) -> u16;
+        fn CreateWindowExW(
+            dw_ex_style: u32,
+            lp_class_name: *const u16,
+            lp_window_name: *const u16,
+            dw_style: u32,
+            x: i32,
+            y: i32,
+            n_width: i32,
+            n_height: i32,
+            h_wnd_parent: isize,
+            h_menu: isize,
+            h_instance: isize,
+            lp_param: *const std::ffi::c_void,
+        ) -> isize;
+        fn DefWindowProcW(hwnd: isize, msg: u32, wparam: usize, lparam: isize) -> isize;
+        fn SetWindowLongPtrW(hwnd: isize, n_index: i32, dw_new_long: isize) -> isize;
+        fn GetWindowLongPtrW(hwnd: isize, n_index: i32) -> isize;
+        fn PeekMessageW(lp_msg: *mut MSG, hwnd: isize, w_msg_filter_min: u32, w_msg_filter_max: u32, w_remove_msg: u32) -> i32;
+        fn TranslateMessage(lp_msg: *const MSG) -> i32;
+        fn DispatchMessageW(lp_msg: *const MSG) -> isize;
+        fn GetCursorPos(lp_point: *mut POINT) -> i32;
+        fn SetForegroundWindow(hwnd: isize) -> i32;
+        fn CreatePopupMenu() -> isize;
+        fn AppendMenuW(h_menu: isize, u_flags: u32, u_id_new_item: usize, lp_new_item: *const u16) -> i32;
+        fn TrackPopupMenu(
+            h_menu: isize,
+            u_flags: u32,
+            x: i32,
+            y: i32,
+            n_reserved: i32,
+            hwnd: isize,
+            prc_rect: *const std::ffi::c_void,
+        ) -> i32;
+        fn DestroyMenu(h_menu: isize) -> i32;
+        fn CreateIcon(
+            h_instance: isize,
+            n_width: i32,
+            n_height: i32,
+            c_planes: u8,
+            c_bits_pixel: u8,
+            lpb_and_bits: *const u8,
+            lpb_xor_bits: *const u8,
+        ) -> isize;
+        fn DestroyIcon(h_icon: isize) -> i32;
+    }
+
+    #[link(name = "shell32")]
+    extern "system" {
+        fn Shell_NotifyIconW(dw_message: u32, lp_data: *const NOTIFYICONDATAW) -> i32;
+    }
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetModuleHandleW(lp_module_name: *const u16) -> isize;
+        fn GetCurrentProcess() -> isize;
+        fn OpenProcess(dw_desired_access: u32, b_inherit_handle: i32, dw_process_id: u32) -> isize;
+        fn CloseHandle(h_object: isize) -> i32;
+        fn K32GetProcessMemoryInfo(process: isize, ppsmem_counters: *mut PROCESS_MEMORY_COUNTERS, cb: u32) -> i32;
+        fn K32EmptyWorkingSet(h_process: isize) -> i32;
+    }
+
+    #[link(name = "advapi32")]
+    extern "system" {
+        fn RegOpenKeyExW(h_key: isize, lp_sub_key: *const u16, ul_options: u32, sam_desired: u32, phk_result: *mut isize) -> i32;
+        fn RegQueryValueExW(
+            h_key: isize,
+            lp_value_name: *const u16,
+            lp_reserved: *const u32,
+            lp_type: *mut u32,
+            lp_data: *mut u8,
+            lpcb_data: *mut u32,
+        ) -> i32;
+        fn RegSetValueExW(
+            h_key: isize,
+            lp_value_name: *const u16,
+            reserved: u32,
+            dw_type: u32,
+            lp_data: *const u8,
+            cb_data: u32,
+        ) -> i32;
+        fn RegDeleteValueW(h_key: isize, lp_value_name: *const u16) -> i32;
+        fn RegCloseKey(h_key: isize) -> i32;
+    }
+
+    #[link(name = "wininet")]
+    extern "system" {
+        fn InternetSetOptionW(h_internet: isize, dw_option: u32, lp_buffer: *const std::ffi::c_void, dw_buffer_length: u32) -> i32;
+    }
+
+    fn to_wide(s: &str) -> Vec<u16> {
+        s.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    struct WinTrayContext {
+        flags: Arc<TrayFlags>,
+        wake: Arc<Condvar>,
+        egui_ctx: Arc<Mutex<Option<egui::Context>>>,
+    }
+
+    unsafe extern "system" fn tray_wnd_proc(hwnd: isize, msg: u32, wparam: usize, lparam: isize) -> isize {
+        if msg == WM_TRAYICON {
+            let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const WinTrayContext;
+            if !ptr.is_null() {
+                let ctx = &*ptr;
+                let event = (lparam as u32) & 0xFFFF;
+                if event == WM_LBUTTONUP || event == WM_LBUTTONDBLCLK {
+                    ctx.flags.show.store(true, Ordering::SeqCst);
+                    tray_notify(&ctx.flags, &ctx.wake, &ctx.egui_ctx);
+                } else if event == WM_RBUTTONUP || event == WM_CONTEXTMENU {
+                    let mut pt = POINT { x: 0, y: 0 };
+                    GetCursorPos(&mut pt);
+                    SetForegroundWindow(hwnd);
+                    let hmenu = CreatePopupMenu();
+                    if hmenu != 0 {
+                        let open_lbl = to_wide("打开 Future Proxy");
+                        let quit_lbl = to_wide("退出");
+                        AppendMenuW(hmenu, MF_STRING, 1001, open_lbl.as_ptr());
+                        AppendMenuW(hmenu, MF_SEPARATOR, 0, std::ptr::null());
+                        AppendMenuW(hmenu, MF_STRING, 1002, quit_lbl.as_ptr());
+                        let cmd = TrackPopupMenu(
+                            hmenu,
+                            TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
+                            pt.x,
+                            pt.y,
+                            0,
+                            hwnd,
+                            std::ptr::null(),
+                        );
+                        DestroyMenu(hmenu);
+                        if cmd == 1001 {
+                            ctx.flags.show.store(true, Ordering::SeqCst);
+                            tray_notify(&ctx.flags, &ctx.wake, &ctx.egui_ctx);
+                        } else if cmd == 1002 {
+                            ctx.flags.quit.store(true, Ordering::SeqCst);
+                            tray_notify(&ctx.flags, &ctx.wake, &ctx.egui_ctx);
+                        }
+                    }
+                }
+            }
+            return 0;
+        }
+        DefWindowProcW(hwnd, msg, wparam, lparam)
+    }
+
+    unsafe fn create_brand_hicon() -> isize {
+        let (rgba, w, h) = build_brand_rgba_icon();
+        let mut bgra = vec![0u8; rgba.len()];
+        for i in (0..rgba.len()).step_by(4) {
+            bgra[i] = rgba[i + 2];     // B
+            bgra[i + 1] = rgba[i + 1]; // G
+            bgra[i + 2] = rgba[i];     // R
+            bgra[i + 3] = rgba[i + 3]; // A
+        }
+        let and_mask = vec![0u8; ((w * h) / 8) as usize];
+        CreateIcon(0, w as i32, h as i32, 1, 32, and_mask.as_ptr(), bgra.as_ptr())
+    }
+
+    pub fn spawn_tray(
+        flags: Arc<TrayFlags>,
+        wake: Arc<Condvar>,
+        egui_ctx: Arc<Mutex<Option<egui::Context>>>,
+    ) {
+        std::thread::spawn(move || unsafe {
+            let h_instance = GetModuleHandleW(std::ptr::null());
+            let class_name = to_wide("FutureProxyTrayClass");
+            let wc = WNDCLASSW {
+                style: 0,
+                lpfn_wnd_proc: Some(tray_wnd_proc),
+                cb_cls_extra: 0,
+                cb_wnd_extra: 0,
+                h_instance,
+                h_icon: 0,
+                h_cursor: 0,
+                hbr_background: 0,
+                lpsz_menu_name: std::ptr::null(),
+                lpsz_class_name: class_name.as_ptr(),
+            };
+            RegisterClassW(&wc);
+
+            let hwnd = CreateWindowExW(
+                0,
+                class_name.as_ptr(),
+                class_name.as_ptr(),
+                0,
+                0,
+                0,
+                0,
+                0,
+                -3isize, // HWND_MESSAGE
+                0,
+                h_instance,
+                std::ptr::null(),
+            );
+            if hwnd == 0 {
+                return;
+            }
+
+            let ctx = Box::new(WinTrayContext {
+                flags: Arc::clone(&flags),
+                wake,
+                egui_ctx,
+            });
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, (&*ctx as *const WinTrayContext) as isize);
+
+            let h_icon = create_brand_hicon();
+            let mut nid: NOTIFYICONDATAW = std::mem::zeroed();
+            nid.cb_size = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
+            nid.hwnd = hwnd;
+            nid.u_id = 1;
+            nid.u_flags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+            nid.u_callback_message = WM_TRAYICON;
+            nid.h_icon = h_icon;
+            let tip = to_wide("Future Proxy (点击打开界面)");
+            for (i, &ch) in tip.iter().take(127).enumerate() {
+                nid.sz_tip[i] = ch;
+            }
+            Shell_NotifyIconW(NIM_ADD, &nid);
+
+            let mut msg: MSG = std::mem::zeroed();
+            while !flags.quit.load(Ordering::SeqCst) {
+                while PeekMessageW(&mut msg, 0, 0, 0, PM_REMOVE) != 0 {
+                    TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+
+            Shell_NotifyIconW(NIM_DELETE, &nid);
+            if h_icon != 0 {
+                DestroyIcon(h_icon);
+            }
+        });
+    }
+
+    pub fn check_system_proxy() -> bool {
+        unsafe {
+            let subkey = to_wide("Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings");
+            let mut hkey: isize = 0;
+            if RegOpenKeyExW(HKEY_CURRENT_USER, subkey.as_ptr(), 0, KEY_READ, &mut hkey) != 0 {
+                return false;
+            }
+            let val_name = to_wide("ProxyEnable");
+            let mut data: u32 = 0;
+            let mut data_len: u32 = std::mem::size_of::<u32>() as u32;
+            let mut reg_type: u32 = 0;
+            let status = RegQueryValueExW(
+                hkey,
+                val_name.as_ptr(),
+                std::ptr::null(),
+                &mut reg_type,
+                (&mut data as *mut u32) as *mut u8,
+                &mut data_len,
+            );
+            RegCloseKey(hkey);
+            status == 0 && data == 1
+        }
+    }
+
+    pub fn set_system_proxy(enable: bool, port: u16) {
+        unsafe {
+            let subkey = to_wide("Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings");
+            let mut hkey: isize = 0;
+            if RegOpenKeyExW(HKEY_CURRENT_USER, subkey.as_ptr(), 0, KEY_WRITE, &mut hkey) != 0 {
+                return;
+            }
+            let enable_name = to_wide("ProxyEnable");
+            let enable_val: u32 = if enable { 1 } else { 0 };
+            RegSetValueExW(
+                hkey,
+                enable_name.as_ptr(),
+                0,
+                REG_DWORD,
+                (&enable_val as *const u32) as *const u8,
+                std::mem::size_of::<u32>() as u32,
+            );
+            if enable {
+                let server_name = to_wide("ProxyServer");
+                let server_val = to_wide(&format!("127.0.0.1:{}", port));
+                RegSetValueExW(
+                    hkey,
+                    server_name.as_ptr(),
+                    0,
+                    REG_SZ,
+                    server_val.as_ptr() as *const u8,
+                    (server_val.len() * 2) as u32,
+                );
+                let override_name = to_wide("ProxyOverride");
+                let override_val = to_wide("localhost;127.*;10.*;172.16.*;172.17.*;172.18.*;172.19.*;172.20.*;172.21.*;172.22.*;172.23.*;172.24.*;172.25.*;172.26.*;172.27.*;172.28.*;172.29.*;172.30.*;172.31.*;192.168.*;<local>");
+                RegSetValueExW(
+                    hkey,
+                    override_name.as_ptr(),
+                    0,
+                    REG_SZ,
+                    override_val.as_ptr() as *const u8,
+                    (override_val.len() * 2) as u32,
+                );
+            }
+            RegCloseKey(hkey);
+            InternetSetOptionW(0, INTERNET_OPTION_SETTINGS_CHANGED, std::ptr::null(), 0);
+            InternetSetOptionW(0, INTERNET_OPTION_REFRESH, std::ptr::null(), 0);
+        }
+    }
+
+    pub fn set_registry_run_autostart(enable: bool, cmd_str: &str) -> Result<(), String> {
+        unsafe {
+            let subkey = to_wide("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
+            let mut hkey: isize = 0;
+            let rc = RegOpenKeyExW(HKEY_CURRENT_USER, subkey.as_ptr(), 0, KEY_WRITE, &mut hkey);
+            if rc != 0 {
+                return Err(format!("无法打开注册表启动项 ({})", rc));
+            }
+            let val_name = to_wide("FutureProxyCore");
+            let status = if enable {
+                let wide_val = to_wide(cmd_str);
+                RegSetValueExW(
+                    hkey,
+                    val_name.as_ptr(),
+                    0,
+                    REG_SZ,
+                    wide_val.as_ptr() as *const u8,
+                    (wide_val.len() * 2) as u32,
+                )
+            } else {
+                let s = RegDeleteValueW(hkey, val_name.as_ptr());
+                if s == 2 { 0 } else { s } // ERROR_FILE_NOT_FOUND is OK
+            };
+            RegCloseKey(hkey);
+            if status == 0 {
+                Ok(())
+            } else {
+                Err(format!("写入注册表启动项失败 ({})", status))
+            }
+        }
+    }
+
+    pub fn check_registry_run_autostart() -> bool {
+        unsafe {
+            let subkey = to_wide("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
+            let mut hkey: isize = 0;
+            if RegOpenKeyExW(HKEY_CURRENT_USER, subkey.as_ptr(), 0, KEY_READ, &mut hkey) != 0 {
+                return false;
+            }
+            let val_name = to_wide("FutureProxyCore");
+            let mut data_len: u32 = 0;
+            let status = RegQueryValueExW(
+                hkey,
+                val_name.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut data_len,
+            );
+            RegCloseKey(hkey);
+            status == 0 && data_len > 0
+        }
+    }
+
+    pub fn read_process_rss_kb(pid: Option<u32>) -> u64 {
+        unsafe {
+            let handle = match pid {
+                None => GetCurrentProcess(),
+                Some(p) => {
+                    let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, p);
+                    if h == 0 {
+                        return 0;
+                    }
+                    h
+                }
+            };
+            let mut pmc: PROCESS_MEMORY_COUNTERS = std::mem::zeroed();
+            pmc.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+            let ok = K32GetProcessMemoryInfo(handle, &mut pmc, pmc.cb);
+            if pid.is_some() {
+                CloseHandle(handle);
+            }
+            if ok != 0 {
+                (pmc.working_set_size / 1024) as u64
+            } else {
+                0
+            }
+        }
+    }
+
+    pub fn trim_working_set() {
+        unsafe {
+            let _ = K32EmptyWorkingSet(GetCurrentProcess());
+        }
+    }
+}
+
+#[cfg(windows)]
+fn spawn_system_tray(
+    flags: Arc<TrayFlags>,
+    wake: Arc<Condvar>,
+    egui_ctx: Arc<Mutex<Option<egui::Context>>>,
+) -> TrayGuard {
+    win_os::spawn_tray(flags, wake, egui_ctx);
 }
 
 fn request_repaint_slot(egui_ctx: &Mutex<Option<egui::Context>>) {
@@ -392,17 +998,31 @@ fn ensure_geo_assets(config_dir: &Path) {
     let user_cfg = dirs::config_dir()
         .or_else(|| dirs::home_dir().map(|h| h.join(".config")))
         .unwrap_or_else(|| PathBuf::from(".config"));
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()));
 
-    for file in ["country.mmdb", "geosite.dat"] {
+    let asset_files: &[&str] = &[
+        "country.mmdb",
+        "geosite.dat",
+        #[cfg(windows)]
+        "wintun.dll",
+    ];
+
+    for &file in asset_files {
         let dst = config_dir.join(file);
         if dst.exists() {
             continue;
         }
-        let candidates = [
-            PathBuf::from("/usr/share/future-proxy").join(file),
-            user_cfg.join("mihomo").join(file),
-            user_cfg.join("mihomo-party/work").join(file),
-        ];
+        let mut candidates = Vec::new();
+        if let Some(ref ed) = exe_dir {
+            candidates.push(ed.join(file));
+            candidates.push(ed.join("resources").join(file));
+        }
+        candidates.push(PathBuf::from("/usr/share/future-proxy").join(file));
+        candidates.push(user_cfg.join("mihomo").join(file));
+        candidates.push(user_cfg.join("mihomo-party/work").join(file));
+
         if let Some(src) = candidates.iter().find(|p| p.exists()) {
             let _ = std::fs::copy(src, &dst);
         }
@@ -467,6 +1087,7 @@ fn migrate_party_subscriptions(config_dir: &Path, meta: &mut ProfilesMeta) -> us
     count
 }
 
+#[cfg(unix)]
 fn check_kde_proxy_enabled() -> bool {
     Command::new("kreadconfig6")
         .args(["--file", "kioslaverc", "--group", "Proxy Settings", "--key", "ProxyType"])
@@ -475,6 +1096,12 @@ fn check_kde_proxy_enabled() -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(windows)]
+fn check_kde_proxy_enabled() -> bool {
+    win_os::check_system_proxy()
+}
+
+#[cfg(unix)]
 fn set_kde_proxy(enable: bool) {
     let write = |key: &str, val: &str| {
         let _ = Command::new("kwriteconfig6")
@@ -503,6 +1130,12 @@ fn set_kde_proxy(enable: bool) {
         .status();
 }
 
+#[cfg(windows)]
+fn set_kde_proxy(enable: bool) {
+    win_os::set_system_proxy(enable, MIXED_PORT);
+}
+
+#[cfg(unix)]
 fn systemd_active() -> bool {
     Command::new("systemctl")
         .args(["--user", "is-active", "--quiet", "future-proxy.service"])
@@ -511,6 +1144,21 @@ fn systemd_active() -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(windows)]
+fn systemd_active() -> bool {
+    use std::os::windows::process::CommandExt;
+    let task_ok = Command::new("schtasks")
+        .args(["/Query", "/TN", "FutureProxyCore"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    task_ok || win_os::check_registry_run_autostart()
+}
+
+#[cfg(unix)]
 fn set_autostart(enable: bool) -> Result<(), String> {
     let out = if enable {
         Command::new("systemctl")
@@ -526,6 +1174,54 @@ fn set_autostart(enable: bool) -> Result<(), String> {
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
     }
     Ok(())
+}
+
+#[cfg(windows)]
+fn set_autostart(enable: bool) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    let config_dir = dirs::config_dir()
+        .or_else(|| dirs::home_dir().map(|h| h.join(".config")))
+        .unwrap_or_else(|| PathBuf::from(".config"))
+        .join("future-proxy");
+    let core_bin = CoreManager::core_bin();
+
+    if enable {
+        // 优先尝试创建最高权限计划任务（支持后台静默运行内核与免 UAC 开启 TUN）
+        let tr_cmd = format!("\"{}\" -d \"{}\"", core_bin.display(), config_dir.display());
+        let sch = Command::new("schtasks")
+            .args([
+                "/Create",
+                "/TN",
+                "FutureProxyCore",
+                "/TR",
+                &tr_cmd,
+                "/SC",
+                "ONLOGON",
+                "/RL",
+                "HIGHEST",
+                "/F",
+            ])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output();
+        if let Ok(out) = sch {
+            if out.status.success() {
+                let _ = Command::new("schtasks")
+                    .args(["/Run", "/TN", "FutureProxyCore"])
+                    .creation_flags(CREATE_NO_WINDOW)
+                    .status();
+            }
+        }
+        // 同时写入当前用户注册表 Run 启动项作为无管理员权限时的可靠保底
+        let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("future-proxy.exe"));
+        let run_cmd = format!("\"{}\" --tray", exe.display());
+        win_os::set_registry_run_autostart(true, &run_cmd)
+    } else {
+        let _ = Command::new("schtasks")
+            .args(["/Delete", "/TN", "FutureProxyCore", "/F"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output();
+        win_os::set_registry_run_autostart(false, "")
+    }
 }
 
 fn match_flag(name: &str) -> &'static str {
@@ -769,6 +1465,7 @@ fn looks_like_clash_config(body: &str) -> bool {
     body.lines().any(|l| l.starts_with("proxies:") || l.starts_with("proxy-providers:"))
 }
 
+#[cfg(unix)]
 fn read_rss_kb(pid: &str) -> u64 {
     std::fs::read_to_string(format!("/proc/{}/status", pid))
         .ok()
@@ -778,6 +1475,68 @@ fn read_rss_kb(pid: &str) -> u64 {
                 .and_then(|l| l.split_whitespace().nth(1).and_then(|v| v.parse().ok()))
         })
         .unwrap_or(0)
+}
+
+#[cfg(unix)]
+fn read_self_rss_kb() -> u64 {
+    read_rss_kb("self")
+}
+
+#[cfg(windows)]
+fn read_self_rss_kb() -> u64 {
+    win_os::read_process_rss_kb(None)
+}
+
+#[cfg(unix)]
+fn read_core_rss_kb(child_pid: Option<u32>) -> u64 {
+    if let Some(p) = child_pid {
+        let kb = read_rss_kb(&p.to_string());
+        if kb > 0 {
+            return kb;
+        }
+    }
+    if let Ok(out) = Command::new("systemctl")
+        .args(["--user", "show", "--property=MainPID", "--value", "future-proxy.service"])
+        .output()
+    {
+        let pid_str = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if !pid_str.is_empty() && pid_str != "0" {
+            return read_rss_kb(&pid_str);
+        }
+    }
+    0
+}
+
+#[cfg(windows)]
+fn read_core_rss_kb(child_pid: Option<u32>) -> u64 {
+    if let Some(pid) = child_pid {
+        let kb = win_os::read_process_rss_kb(Some(pid));
+        if kb > 0 {
+            return kb;
+        }
+    }
+    use std::os::windows::process::CommandExt;
+    for img in ["future-proxy-core.exe", "mihomo.exe"] {
+        if let Ok(out) = Command::new("tasklist")
+            .args(["/FI", &format!("IMAGENAME eq {}", img), "/FO", "CSV", "/NH"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+        {
+            let text = String::from_utf8_lossy(&out.stdout);
+            for line in text.lines() {
+                let parts: Vec<&str> = line.split("\",\"").collect();
+                if parts.len() >= 2 {
+                    if let Ok(pid) = parts[1].trim_matches('"').parse::<u32>() {
+                        let kb = win_os::read_process_rss_kb(Some(pid));
+                        if kb > 0 {
+                            return kb;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    0
 }
 
 fn reload_core(config: &Path) -> Result<(), String> {
@@ -804,13 +1563,38 @@ struct CoreManager {
 }
 
 impl CoreManager {
-    fn core_bin() -> &'static str {
-        if Path::new("/usr/bin/future-proxy-core").exists() {
-            "/usr/bin/future-proxy-core"
-        } else if Path::new("/usr/bin/mihomo-core").exists() {
-            "/usr/bin/mihomo-core"
-        } else {
-            "future-proxy-core"
+    fn core_bin() -> PathBuf {
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                #[cfg(windows)]
+                for name in ["future-proxy-core.exe", "mihomo.exe", "clash-meta.exe"] {
+                    let candidate = dir.join(name);
+                    if candidate.exists() {
+                        return candidate;
+                    }
+                }
+                #[cfg(unix)]
+                for name in ["future-proxy-core", "mihomo-core", "mihomo"] {
+                    let candidate = dir.join(name);
+                    if candidate.exists() {
+                        return candidate;
+                    }
+                }
+            }
+        }
+        #[cfg(unix)]
+        {
+            if Path::new("/usr/bin/future-proxy-core").exists() {
+                return PathBuf::from("/usr/bin/future-proxy-core");
+            }
+            if Path::new("/usr/bin/mihomo-core").exists() {
+                return PathBuf::from("/usr/bin/mihomo-core");
+            }
+            PathBuf::from("future-proxy-core")
+        }
+        #[cfg(windows)]
+        {
+            PathBuf::from("future-proxy-core.exe")
         }
     }
 
@@ -820,21 +1604,33 @@ impl CoreManager {
             self.failures = 0;
             return String::new();
         }
-        // 自启服务已启用时，优先让 systemd 拉起，避免和 GUI 各起一份
+        // 自启服务已启用时，优先让后台服务拉起，避免和 GUI 各起一份
         if prefer_systemd {
-            if systemd_active() {
-                return "systemd 已托管内核，但控制接口暂无响应".to_string();
+            #[cfg(unix)]
+            {
+                if systemd_active() {
+                    return "systemd 已托管内核，但控制接口暂无响应".to_string();
+                }
+                let _ = Command::new("systemctl")
+                    .args(["--user", "start", "future-proxy.service"])
+                    .status();
+                if self.last_spawn.map(|t| t.elapsed() < Duration::from_secs(5)).unwrap_or(false) {
+                    return String::new();
+                }
+                self.last_spawn = Some(Instant::now());
+                if systemd_active() {
+                    return String::new();
+                }
             }
-            let _ = Command::new("systemctl")
-                .args(["--user", "start", "future-proxy.service"])
-                .status();
-            if self.last_spawn.map(|t| t.elapsed() < Duration::from_secs(5)).unwrap_or(false) {
-                return String::new();
-            }
-            self.last_spawn = Some(Instant::now());
-            // 给 systemd 一点时间；仍失败再回落到直接 spawn
-            if systemd_active() {
-                return String::new();
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                let _ = Command::new("schtasks")
+                    .args(["/Run", "/TN", "FutureProxyCore"])
+                    .creation_flags(CREATE_NO_WINDOW)
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
             }
         }
         // 自己拉起的进程已退出：记录失败
@@ -864,8 +1660,14 @@ impl CoreManager {
             }
         }
         let log = std::fs::File::create(config_dir.join("core.log")).ok();
-        let mut cmd = Command::new(Self::core_bin());
+        let bin = Self::core_bin();
+        let mut cmd = Command::new(&bin);
         cmd.arg("-d").arg(config_dir).stdin(Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
         if let Some(f) = log {
             if let Ok(f2) = f.try_clone() {
                 cmd.stdout(f).stderr(f2);
@@ -879,7 +1681,7 @@ impl CoreManager {
             }
             Err(e) => {
                 self.failures += 1;
-                format!("无法启动内核 {}: {}", Self::core_bin(), e)
+                format!("无法启动内核 {}: {}", bin.display(), e)
             }
         }
     }
@@ -894,7 +1696,7 @@ impl CoreManager {
     }
 
     fn stop(&mut self) {
-        // systemd 托管时不要杀，否则会跟服务抢
+        // 后台服务托管时不要杀，否则会跟服务抢
         if systemd_active() {
             self.child = None;
             return;
@@ -1716,22 +2518,31 @@ struct AppRuntime {
     core: Arc<Mutex<CoreManager>>,
     tray_flags: Arc<TrayFlags>,
     egui_ctx_slot: Arc<Mutex<Option<egui::Context>>>,
-    _tray: Option<ksni::blocking::Handle<ProxyTray>>,
-    // Kept so Condvar/tray wake stays alive for ProxyTray clones.
+    _tray: TrayGuard,
+    // Kept so Condvar/tray wake stays alive for tray handlers.
     _wake: Arc<Condvar>,
     _wake_mutex: Arc<Mutex<()>>,
-    /// Single-instance abstract socket; dropping/clearing releases the name for handoff.
-    listener_slot: Arc<Mutex<Option<UnixListener>>>,
+    /// Single-instance IPC listener; dropping/clearing releases the lock for handoff.
+    listener_slot: Arc<Mutex<Option<IpcListener>>>,
 }
 
 impl AppRuntime {
-    fn start(listener: Option<UnixListener>) -> Self {
+    fn start(listener: Option<IpcListener>) -> Self {
         let state = Arc::new(Mutex::new(AppState::new()));
         {
             let mut app = state.lock().unwrap();
             if app.profiles.autostart {
                 match set_autostart(true) {
-                    Ok(()) => app.status_msg = "内核由 systemd 托管".to_string(),
+                    Ok(()) => {
+                        #[cfg(unix)]
+                        {
+                            app.status_msg = "内核由 systemd 托管".to_string();
+                        }
+                        #[cfg(windows)]
+                        {
+                            app.status_msg = "内核由系统后台服务托管".to_string();
+                        }
+                    }
                     Err(e) => app.status_msg = format!("自启服务异常: {}（将回退直接启动内核）", e),
                 }
             }
@@ -1781,8 +2592,8 @@ impl AppRuntime {
                     let mem = if last_mem.elapsed() > Duration::from_secs(3) {
                         last_mem = Instant::now();
                         let core_pid = core.lock().unwrap().pid();
-                        let core_kb = core_pid.map(|p| read_rss_kb(&p.to_string())).unwrap_or(0);
-                        Some((read_rss_kb("self"), core_kb))
+                        let core_kb = read_core_rss_kb(core_pid);
+                        Some((read_self_rss_kb(), core_kb))
                     } else {
                         None
                     };
@@ -1936,14 +2747,11 @@ impl AppRuntime {
             });
         }
 
-        let tray_handle = ProxyTray {
-            flags: Arc::clone(&tray_flags),
-            wake: Arc::clone(&wake),
-            egui_ctx: Arc::clone(&egui_ctx_slot),
-        }
-        .spawn()
-        .map_err(|e| eprintln!("托盘启动失败: {e}"))
-        .ok();
+        let tray_handle = spawn_system_tray(
+            Arc::clone(&tray_flags),
+            Arc::clone(&wake),
+            Arc::clone(&egui_ctx_slot),
+        );
 
         let listener_slot = Arc::new(Mutex::new(listener));
         spawn_ipc_listener(
@@ -2135,11 +2943,25 @@ impl FutureProxyApp {
 }
 
 fn chrono_like_now() -> String {
-    Command::new("date")
-        .arg("+%m-%d %H:%M")
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_else(|_| "刚刚".to_string())
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+        + 8 * 3600; // UTC+8
+    let days = secs.div_euclid(86400);
+    let day_secs = secs.rem_euclid(86400);
+    let hour = day_secs / 3600;
+    let min = (day_secs % 3600) / 60;
+    // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm)
+    let z = days + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = (z - era * 146097) as u32;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    format!("{:02}-{:02} {:02}:{:02}", m, d, hour, min)
 }
 
 impl eframe::App for FutureProxyApp {
@@ -2477,7 +3299,11 @@ impl eframe::App for FutureProxyApp {
                             let mem_core_str = if app.mem_core_kb > 0 {
                                 format!("{:.0} MB", app.mem_core_kb as f64 / 1024.0)
                             } else if systemd_active() {
-                                "systemd 守护".to_string()
+                                if cfg!(windows) {
+                                    "后台守护".to_string()
+                                } else {
+                                    "systemd 守护".to_string()
+                                }
                             } else {
                                 "-".to_string()
                             };
@@ -3069,10 +3895,15 @@ impl eframe::App for FutureProxyApp {
                                 cup_font_med(13.0),
                                 CUP_LABEL_PRIMARY,
                             );
+                            let auto_desc = if cfg!(windows) {
+                                "登录 Windows 时由系统后台任务静默守护运行"
+                            } else {
+                                "登录桌面时由 systemd 用户服务守护运行"
+                            };
                             cp.text(
                                 egui::pos2(row2.left() + 14.0, row2.center().y + 9.0),
                                 egui::Align2::LEFT_CENTER,
-                                "登录桌面时由 systemd 用户服务守护运行",
+                                auto_desc,
                                 cup_font_reg(11.0),
                                 CUP_LABEL_SECONDARY,
                             );
@@ -3092,7 +3923,11 @@ impl eframe::App for FutureProxyApp {
                                         }
                                         app.save_profiles();
                                         app.status_msg = if next_auto {
-                                            "已开启开机自启 (systemd 用户服务)".to_string()
+                                            if cfg!(windows) {
+                                                "已开启开机自启 (Windows 后台任务与启动项)".to_string()
+                                            } else {
+                                                "已开启开机自启 (systemd 用户服务)".to_string()
+                                            }
                                         } else {
                                             "已关闭开机自启".to_string()
                                         };
@@ -3132,9 +3967,13 @@ impl eframe::App for FutureProxyApp {
             let mut app = self.state.lock().unwrap();
             app.is_system_proxy_on = on;
             app.status_msg = if on == enable {
-                if on { format!("KDE 系统代理已开启 (127.0.0.1:{})", MIXED_PORT) } else { "KDE 系统代理已关闭".to_string() }
+                if on {
+                    format!("系统代理已开启 (127.0.0.1:{})", MIXED_PORT)
+                } else {
+                    "系统代理已关闭".to_string()
+                }
             } else {
-                "✗ 修改 KDE 系统代理失败（kwriteconfig6 不可用？）".to_string()
+                "✗ 修改系统代理失败".to_string()
             };
         }
         if let Some(on) = toggle_tun {
@@ -3181,12 +4020,25 @@ impl eframe::App for FutureProxyApp {
 
 fn setup_custom_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
-    let mut reg_candidates: Vec<PathBuf> = vec![
+    let mut reg_candidates: Vec<PathBuf> = Vec::new();
+    #[cfg(windows)]
+    {
+        if let Some(windir) = std::env::var_os("WINDIR") {
+            let fonts_dir = PathBuf::from(windir).join("Fonts");
+            reg_candidates.push(fonts_dir.join("msyh.ttc"));
+            reg_candidates.push(fonts_dir.join("msyh.ttf"));
+            reg_candidates.push(fonts_dir.join("simhei.ttf"));
+        }
+        reg_candidates.push(PathBuf::from("C:\\Windows\\Fonts\\msyh.ttc"));
+        reg_candidates.push(PathBuf::from("C:\\Windows\\Fonts\\msyh.ttf"));
+        reg_candidates.push(PathBuf::from("C:\\Windows\\Fonts\\simhei.ttf"));
+    }
+    reg_candidates.extend([
         PathBuf::from("/usr/share/fonts/truetype/SourceHanSansCN-Regular.otf"),
         PathBuf::from("/usr/share/fonts/truetype/NotoSansCJKsc-VF.otf"),
         PathBuf::from("/usr/share/fonts/truetype/SourceHanSansCN-Normal.otf"),
         PathBuf::from("/usr/share/fonts/truetype/wqy-zenhei.ttc"),
-    ];
+    ]);
     if let Some(data_dir) = dirs::data_local_dir() {
         reg_candidates.push(data_dir.join("fonts/win/msyh.ttf"));
     }
@@ -3204,12 +4056,24 @@ fn setup_custom_fonts(ctx: &egui::Context) {
         }
     }
 
-    let med_candidates = [
-        "/usr/share/fonts/truetype/SourceHanSansCN-Medium.otf",
-        "/usr/share/fonts/truetype/SourceHanSansCN-Bold.otf",
-        "/usr/share/fonts/truetype/SourceHanSansCN-Regular.otf",
-    ];
-    for path in med_candidates {
+    let mut med_candidates: Vec<PathBuf> = Vec::new();
+    #[cfg(windows)]
+    {
+        if let Some(windir) = std::env::var_os("WINDIR") {
+            let fonts_dir = PathBuf::from(windir).join("Fonts");
+            med_candidates.push(fonts_dir.join("msyhbd.ttc"));
+            med_candidates.push(fonts_dir.join("msyhbd.ttf"));
+            med_candidates.push(fonts_dir.join("msyh.ttc"));
+        }
+        med_candidates.push(PathBuf::from("C:\\Windows\\Fonts\\msyhbd.ttc"));
+        med_candidates.push(PathBuf::from("C:\\Windows\\Fonts\\msyh.ttc"));
+    }
+    med_candidates.extend([
+        PathBuf::from("/usr/share/fonts/truetype/SourceHanSansCN-Medium.otf"),
+        PathBuf::from("/usr/share/fonts/truetype/SourceHanSansCN-Bold.otf"),
+        PathBuf::from("/usr/share/fonts/truetype/SourceHanSansCN-Regular.otf"),
+    ]);
+    for path in &med_candidates {
         if let Ok(data) = std::fs::read(path) {
             fonts.font_data.insert("cjk_med".to_owned(), egui::FontData::from_owned(data));
             let mut fam = vec!["cjk_med".to_owned()];
@@ -3244,10 +4108,13 @@ fn format_speed(bytes_per_sec: u64) -> String {
 }
 
 fn native_options() -> eframe::NativeOptions {
+    let (rgba, width, height) = build_brand_rgba_icon();
+    let icon = egui::IconData { rgba, width, height };
     eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([780.0, 740.0])
             .with_min_inner_size([640.0, 520.0])
+            .with_icon(Arc::new(icon))
             .with_title("Future Proxy"),
         // Required so closing the window returns from run_native (tray can reopen UI).
         run_and_return: true,
@@ -3308,8 +4175,8 @@ fn shutdown_core_if_needed(rt: &AppRuntime) {
     }
 }
 
-
-fn relaunch_tray_and_exit(listener_slot: &Mutex<Option<UnixListener>>) -> ! {
+#[cfg(unix)]
+fn relaunch_tray_and_exit(listener_slot: &Mutex<Option<IpcListener>>) -> ! {
     // Release single-instance sock BEFORE spawning, or the child --tray will see us
     // still holding the name, send no SHOW, and exit — leaving the user with zero tray.
     release_instance(listener_slot);
@@ -3325,6 +4192,7 @@ fn relaunch_tray_and_exit(listener_slot: &Mutex<Option<UnixListener>>) -> ! {
     std::process::exit(0);
 }
 
+#[cfg(unix)]
 fn tray_only_main() {
     // No eframe / no Wayland window — avoids zombie "没有响应" surfaces after GUI close.
     // If a UI/tray already owns the instance sock, exit quietly (do not SHOW).
@@ -3346,14 +4214,11 @@ fn tray_only_main() {
         Arc::clone(&wake),
         Arc::clone(&egui_ctx_slot),
     );
-    let _tray = ProxyTray {
-        flags: Arc::clone(&flags),
-        wake: Arc::clone(&wake),
-        egui_ctx: Arc::clone(&egui_ctx_slot),
-    }
-    .spawn()
-    .map_err(|e| eprintln!("托盘启动失败: {e}"))
-    .ok();
+    let _tray = spawn_system_tray(
+        Arc::clone(&flags),
+        Arc::clone(&wake),
+        Arc::clone(&egui_ctx_slot),
+    );
 
     loop {
         let guard = wake_mutex.lock().unwrap();
@@ -3404,39 +4269,81 @@ fn tray_only_main() {
 }
 
 fn main() -> eframe::Result<()> {
-    if std::env::args().any(|a| a == "--tray") {
+    let start_in_tray = std::env::args().any(|a| a == "--tray");
+
+    #[cfg(unix)]
+    if start_in_tray {
         tray_only_main();
         return Ok(());
     }
 
     // Desktop/dock Exec: if tray or GUI already running, ask it to SHOW and exit.
-    let Some(listener) = take_single_instance(true) else {
+    let Some(listener) = take_single_instance(!start_in_tray) else {
         return Ok(());
     };
 
     let rt = AppRuntime::start(Some(listener));
 
+    #[cfg(windows)]
+    let mut skip_initial_gui = start_in_tray;
+
     loop {
         if rt.tray_flags.quit.load(Ordering::SeqCst) {
             break;
         }
-        match run_gui(&rt) {
-            Ok(()) => {}
-            Err(e) => {
-                eprintln!("Future Proxy GUI error: {e}");
+
+        #[cfg(windows)]
+        let should_open_gui = if skip_initial_gui {
+            skip_initial_gui = false;
+            false
+        } else {
+            true
+        };
+        #[cfg(unix)]
+        let should_open_gui = true;
+
+        if should_open_gui {
+            match run_gui(&rt) {
+                Ok(()) => {}
+                Err(e) => {
+                    eprintln!("Future Proxy GUI error: {e}");
+                }
             }
+            *rt.egui_ctx_slot.lock().unwrap() = None;
         }
-        *rt.egui_ctx_slot.lock().unwrap() = None;
 
         if rt.tray_flags.quit.load(Ordering::SeqCst) {
             break;
         }
-        // Window closed (X or in-UI button). Hand off to a clean --tray process so the
-        // Wayland/GL connection is fully torn down — otherwise KDE keeps a frozen
-        // "没有响应" zombie window that ignores further clicks.
+
         rt.state.lock().unwrap().save_profiles();
-        // Prevent Drop from stopping a systemd-managed or keep-alive core.
-        relaunch_tray_and_exit(&rt.listener_slot);
+
+        #[cfg(unix)]
+        {
+            // Window closed (X or in-UI button). Hand off to a clean --tray process so the
+            // Wayland/GL connection is fully torn down — otherwise KDE keeps a frozen
+            // "没有响应" zombie window that ignores further clicks.
+            relaunch_tray_and_exit(&rt.listener_slot);
+        }
+
+        #[cfg(windows)]
+        {
+            // On Windows, keep the tray icon alive in the same process, trim WorkingSet
+            // memory (~5-8 MB in background), and sleep until user clicks the tray icon.
+            win_os::trim_working_set();
+            let guard = rt._wake_mutex.lock().unwrap();
+            let mut guard = guard;
+            loop {
+                if rt.tray_flags.quit.load(Ordering::SeqCst) {
+                    break;
+                }
+                if rt.tray_flags.show.swap(false, Ordering::SeqCst) {
+                    break;
+                }
+                let (g, _) = rt._wake.wait_timeout(guard, Duration::from_millis(500)).unwrap();
+                guard = g;
+            }
+        }
     }
 
     release_instance(&rt.listener_slot);

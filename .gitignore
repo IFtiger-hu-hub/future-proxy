@@ -1,6 +1,9 @@
 /target
+/Future-Proxy
 packaging/rpmbuild
 *.rpm
+*.exe
+*.zip
 **/*.rs.bk
 .idea
 .vscode
