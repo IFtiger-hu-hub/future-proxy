@@ -143,10 +143,20 @@ pub fn chrono_like_now() -> String {
 }
 
 pub fn detect_intranet_ip() -> String {
-    if let Ok(sock) = std::net::UdpSocket::bind("0.0.0.0:0") {
-        if sock.connect("223.5.5.5:53").is_ok() {
-            if let Ok(addr) = sock.local_addr() {
-                return addr.ip().to_string();
+    // 优先探测局域网私有路由段（已配置在 TUN route-exclude-address 中，必定走物理网卡而非 198.18.0.1 虚拟网卡）
+    for target in ["192.168.1.1:80", "10.0.0.1:80", "172.16.0.1:80", "223.5.5.5:53"] {
+        if let Ok(sock) = std::net::UdpSocket::bind("0.0.0.0:0") {
+            if sock.connect(target).is_ok() {
+                if let Ok(addr) = sock.local_addr() {
+                    let ip = addr.ip().to_string();
+                    if !ip.starts_with("198.18.")
+                        && !ip.starts_with("127.")
+                        && !ip.starts_with("169.254.")
+                        && ip != "0.0.0.0"
+                    {
+                        return ip;
+                    }
+                }
             }
         }
     }

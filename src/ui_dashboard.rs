@@ -93,6 +93,8 @@ pub fn render_dashboard_tab(
 
     ui.add_space(14.0);
 
+    let viewport_avail_h = ui.available_height();
+
     egui::ScrollArea::vertical()
         .id_salt("bento_dashboard_scroll")
         .auto_shrink([false, false])
@@ -101,10 +103,11 @@ pub fn render_dashboard_tab(
             ui.spacing_mut().item_spacing = egui::vec2(gap, gap);
 
             let avail_w = ui.available_width();
-            let row1_h = 138.0_f32;
-            let row2_h = 46.0_f32;
-            let row3_h = 124.0_f32;
-            let row4_h = 194.0_f32;
+            // 根据窗口纵向高度动态舒展前 3 行卡片，并让第 4 行精准撑满底部剩余全部高度，彻底消除大屏下半屏黑洞留白
+            let extra_h = (viewport_avail_h - 544.0).max(0.0);
+            let row1_h = (138.0 + (extra_h * 0.14).min(46.0)).round();
+            let row2_h = (46.0 + (extra_h * 0.03).min(10.0)).round();
+            let row3_h = (124.0 + (extra_h * 0.11).min(34.0)).round();
 
             // 响应式断点：宽度 >= 760px 采用 4 列 Bento 网格；窄窗口 (< 760px) 自动折行切换为 2 列紧凑网格
             if avail_w >= 760.0 {
@@ -162,7 +165,9 @@ pub fn render_dashboard_tab(
                     draw_memory_info_card(ui, ctx, app, pal, &mut acts, col_w, row3_h);
                 });
 
-                // ROW 4: Live Connections (62%) + Proxy Groups (38%)
+                // ROW 4: Live Connections (62%) + Proxy Groups (38%) — 精准撑满视口底部剩余高度
+                let used_h = row1_h + row2_h + row3_h + gap * 3.0;
+                let row4_h = (viewport_avail_h - used_h - 2.0).max(194.0);
                 let left_w = (total_grid_w * 0.62).max(320.0);
                 let right_w = (total_grid_w - left_w - gap).max(180.0);
                 ui.horizontal(|ui| {
@@ -171,6 +176,7 @@ pub fn render_dashboard_tab(
                     draw_proxy_groups_card(ui, app, pal, right_w, row4_h);
                 });
             } else {
+                let row4_h = 194.0_f32;
                 // === 窄屏 / 分屏 2 列响应式布局 ===
                 let col2_w = ((avail_w - gap) / 2.0).max(140.0);
                 let full_w = col2_w * 2.0 + gap;
@@ -303,7 +309,8 @@ fn draw_status_card(
         }
     };
 
-    let avatar_center = egui::pos2(st_rect.left() + 31.0, st_rect.top() + 57.0);
+    let mid_shift = ((height - 138.0) * 0.38).max(0.0);
+    let avatar_center = egui::pos2(st_rect.left() + 31.0, st_rect.top() + 57.0 + mid_shift);
     sp.circle_filled(avatar_center, 14.5, pal.surface_container);
     sp.circle_stroke(
         avatar_center,
@@ -324,7 +331,7 @@ fn draw_status_card(
     });
     let title_w = title_g.size().x;
     sp.galley(
-        egui::pos2(st_rect.left() + 52.0, st_rect.top() + 38.0),
+        egui::pos2(st_rect.left() + 52.0, st_rect.top() + 38.0 + mid_shift),
         title_g,
         pal.text_primary,
     );
@@ -333,11 +340,11 @@ fn draw_status_card(
         let max_sub_x = st_rect.right() - 88.0;
         if sub_x + 30.0 < max_sub_x {
             let clipped_sub = sp.with_clip_rect(egui::Rect::from_min_max(
-                egui::pos2(sub_x, st_rect.top() + 38.0),
-                egui::pos2(max_sub_x, st_rect.top() + 60.0),
+                egui::pos2(sub_x, st_rect.top() + 38.0 + mid_shift),
+                egui::pos2(max_sub_x, st_rect.top() + 60.0 + mid_shift),
             ));
             clipped_sub.text(
-                egui::pos2(sub_x, st_rect.top() + 49.0),
+                egui::pos2(sub_x, st_rect.top() + 49.0 + mid_shift),
                 egui::Align2::LEFT_CENTER,
                 format!("· {}", leaf_title),
                 cup_font_reg(11.5),
@@ -352,7 +359,7 @@ fn draw_status_card(
         "↻ 测试节点"
     };
     let tag1_rect = egui::Rect::from_min_size(
-        egui::pos2(st_rect.left() + 52.0, st_rect.top() + 64.0),
+        egui::pos2(st_rect.left() + 52.0, st_rect.top() + 64.0 + mid_shift),
         egui::vec2(64.0, 20.0),
     );
     let tag1_resp = ui.interact(
@@ -450,7 +457,7 @@ fn draw_status_card(
     let q_g = ui.fonts(|f| f.layout_no_wrap(q_txt.clone(), cup_font_med(10.0), q_fg));
     let tag2_w = (q_g.size().x + 16.0).max(64.0);
     let tag2_rect = egui::Rect::from_min_size(
-        egui::pos2(tag1_rect.right() + 6.0, st_rect.top() + 64.0),
+        egui::pos2(tag1_rect.right() + 6.0, st_rect.top() + 64.0 + mid_shift),
         egui::vec2(tag2_w, 20.0),
     );
     let tag2_resp = ui.interact(
@@ -786,8 +793,9 @@ fn draw_intranet_ip_card(
     } else {
         app.intranet_ip.clone()
     };
+    let r3_shift = ((height - 124.0) * 0.35).max(0.0);
     ipp.text(
-        egui::pos2(ip_rect.left() + 14.0, ip_rect.top() + 48.0),
+        egui::pos2(ip_rect.left() + 14.0, ip_rect.top() + 48.0 + r3_shift),
         egui::Align2::LEFT_CENTER,
         &shown_ip,
         cup_font_med(17.5),
@@ -887,8 +895,9 @@ fn draw_profile_card(
         .find(|s| s.id == app.profiles.active)
         .cloned();
     if let Some(sub) = active_sub {
+        let r3_shift = ((height - 124.0) * 0.35).max(0.0);
         prp.text(
-            egui::pos2(pr_rect.left() + 14.0, pr_rect.top() + 48.0),
+            egui::pos2(pr_rect.left() + 14.0, pr_rect.top() + 48.0 + r3_shift * 0.6),
             egui::Align2::LEFT_CENTER,
             format_cupertino_title(&sub.name),
             cup_font_med(14.0),
@@ -902,7 +911,7 @@ fn draw_profile_card(
             "长期有效".to_string()
         };
         prp.text(
-            egui::pos2(pr_rect.right() - 14.0, pr_rect.top() + 48.0),
+            egui::pos2(pr_rect.right() - 14.0, pr_rect.top() + 48.0 + r3_shift * 0.6),
             egui::Align2::RIGHT_CENTER,
             days_lbl,
             cup_font_reg(10.0),
@@ -923,14 +932,14 @@ fn draw_profile_card(
             ("未同步".to_string(), "点击刷新".to_string(), 0.0_f32)
         };
         prp.text(
-            egui::pos2(pr_rect.left() + 14.0, pr_rect.top() + 80.0),
+            egui::pos2(pr_rect.left() + 14.0, pr_rect.top() + 80.0 + r3_shift),
             egui::Align2::LEFT_CENTER,
             pct_str,
             cup_font_med(12.0),
             pal.text_primary,
         );
         prp.text(
-            egui::pos2(pr_rect.right() - 14.0, pr_rect.top() + 80.0),
+            egui::pos2(pr_rect.right() - 14.0, pr_rect.top() + 80.0 + r3_shift),
             egui::Align2::RIGHT_CENTER,
             quota_str,
             cup_font_reg(10.0),
@@ -1009,15 +1018,18 @@ fn draw_service_status_card(
         (fallback_d as f32 * 0.65).max(18.0) as i32
     };
 
+    let srv_shift = ((height - 124.0) * 0.25).max(0.0);
+    let srv_step = 38.0 + ((height - 124.0) * 0.28).max(0.0);
+    let srv_pill_h = (32.0 + ((height - 124.0) * 0.16).max(0.0)).min(38.0);
     for (idx, (badge_ch, srv_name, delay_val)) in
         [("G", "Google", g_delay), ("⚡", "Cloudflare", cf_delay)]
             .iter()
             .enumerate()
     {
-        let pill_y = sv_rect.top() + 38.0 + idx as f32 * 38.0;
+        let pill_y = sv_rect.top() + 38.0 + srv_shift + idx as f32 * srv_step;
         let s_pill = egui::Rect::from_min_size(
             egui::pos2(sv_rect.left() + 10.0, pill_y),
-            egui::vec2(sv_rect.width() - 20.0, 32.0),
+            egui::vec2(sv_rect.width() - 20.0, srv_pill_h),
         );
         let row_resp = ui.interact(
             s_pill,
@@ -1150,6 +1162,7 @@ fn draw_memory_info_card(
     let core_mb = app.mem_core_kb as f64 / 1024.0;
     let core_rss_mb = app.mem_core_rss_kb as f64 / 1024.0;
     let tot_mb = (gui_mb + core_mb).max(1.0);
+    let m_shift = ((height - 124.0) * 0.30).max(0.0);
     let mem_g = ui.fonts(|f| {
         f.layout_no_wrap(
             format!("{:.1}", tot_mb),
@@ -1159,12 +1172,12 @@ fn draw_memory_info_card(
     });
     let mem_w = mem_g.size().x;
     mmp.galley(
-        egui::pos2(mm_rect.left() + 14.0, mm_rect.top() + 34.0),
+        egui::pos2(mm_rect.left() + 14.0, mm_rect.top() + 34.0 + m_shift * 0.5),
         mem_g,
         pal.text_primary,
     );
     mmp.text(
-        egui::pos2(mm_rect.left() + 17.0 + mem_w, mm_rect.top() + 47.0),
+        egui::pos2(mm_rect.left() + 17.0 + mem_w, mm_rect.top() + 47.0 + m_shift * 0.5),
         egui::Align2::LEFT_CENTER,
         "MB",
         cup_font_med(10.5),
@@ -1173,7 +1186,7 @@ fn draw_memory_info_card(
     if app.mem_sys_total_gb > 0.1 {
         let sys_pct = (app.mem_sys_used_gb / app.mem_sys_total_gb * 100.0).clamp(0.0, 100.0);
         mmp.text(
-            egui::pos2(mm_rect.right() - 14.0, mm_rect.top() + 47.0),
+            egui::pos2(mm_rect.right() - 14.0, mm_rect.top() + 47.0 + m_shift * 0.5),
             egui::Align2::RIGHT_CENTER,
             format!("系统 {:.0}%", sys_pct),
             cup_font_reg(9.5),
@@ -1182,7 +1195,7 @@ fn draw_memory_info_card(
     }
 
     let mbar = egui::Rect::from_min_size(
-        egui::pos2(mm_rect.left() + 14.0, mm_rect.top() + 64.0),
+        egui::pos2(mm_rect.left() + 14.0, mm_rect.top() + 64.0 + m_shift),
         egui::vec2(mm_rect.width() - 28.0, 5.5),
     );
     mmp.rect_filled(mbar, 2.8, egui::Color32::from_rgb(191, 219, 254));
@@ -1366,8 +1379,12 @@ fn draw_live_connections_card(
             pal.text_muted,
         );
     } else {
-        for (r_i, conn) in app.live_connections.iter().take(4).enumerate() {
+        let max_rows = ((height - 64.0) / 30.0).floor().max(4.0) as usize;
+        for (r_i, conn) in app.live_connections.iter().take(max_rows).enumerate() {
             let ry = hdr_y + 25.0 + r_i as f32 * 30.0;
+            if ry + 12.0 > lc_rect.bottom() {
+                break;
+            }
             let init_ch = conn
                 .source
                 .chars()
@@ -1493,8 +1510,13 @@ fn draw_proxy_groups_card(
     };
 
     let mut clicked_group = false;
-    for (g_i, (g_name, g_now)) in summaries.iter().take(3).enumerate() {
+    let max_groups = ((height - 42.0) / 47.0).floor().max(3.0) as usize;
+    let badge_letters = ["P", "A", "S", "J", "U", "H", "G", "F"];
+    for (g_i, (g_name, g_now)) in summaries.iter().take(max_groups).enumerate() {
         let gy = pg_rect.top() + 40.0 + g_i as f32 * 47.0;
+        if gy + 38.0 > pg_rect.bottom() {
+            break;
+        }
         let g_box = egui::Rect::from_min_size(
             egui::pos2(pg_rect.left() + 10.0, gy),
             egui::vec2(pg_rect.width() - 20.0, 41.0),
@@ -1519,13 +1541,7 @@ fn draw_proxy_groups_card(
 
         let avatar_c = egui::pos2(g_box.left() + 18.0, g_box.center().y);
         pgp.circle_filled(avatar_c, 11.0, pal.bg_card);
-        let badge_ltr = if g_i == 0 {
-            "P"
-        } else if g_i == 1 {
-            "A"
-        } else {
-            "S"
-        };
+        let badge_ltr = badge_letters.get(g_i).copied().unwrap_or("G");
         pgp.text(
             avatar_c,
             egui::Align2::CENTER_CENTER,

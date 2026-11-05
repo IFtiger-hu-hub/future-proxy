@@ -363,9 +363,8 @@ pub fn render_connections_tab(ui: &mut egui::Ui, app: &mut AppState, pal: &Theme
 
     ui.add_space(14.0);
 
-    // Live Connections Table Bento Card
-    let rows_count = app.live_connections.len().max(1);
-    let table_h = (52.0 + rows_count as f32 * 38.0).clamp(160.0, 520.0);
+    // Live Connections Table Bento Card — 自动撑满剩余视口高度并根据高度动态渲染更多连接行
+    let table_h = (ui.available_height() - 4.0).max(200.0);
     let (t_card, _) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), table_h),
         egui::Sense::hover(),
@@ -407,7 +406,8 @@ pub fn render_connections_tab(ui: &mut egui::Ui, app: &mut AppState, pal: &Theme
             pal.text_secondary,
         );
     } else {
-        for (ri, item) in app.live_connections.iter().take(12).enumerate() {
+        let max_rows = ((table_h - 54.0) / 36.0).floor().max(5.0) as usize;
+        for (ri, item) in app.live_connections.iter().take(max_rows).enumerate() {
             let ry = t_card.top() + 58.0 + ri as f32 * 36.0;
             if ry + 14.0 > t_card.bottom() {
                 break;

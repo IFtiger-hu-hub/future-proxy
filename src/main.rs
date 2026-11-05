@@ -192,6 +192,9 @@ impl AppRuntime {
                             app.mem_core_rss_kb = m.core_rss_kb;
                             app.mem_sys_used_gb = m.sys_used_gb;
                             app.mem_sys_total_gb = m.sys_total_gb;
+                            if app.intranet_ip.starts_with("198.18.") || app.intranet_ip == "127.0.0.1" {
+                                app.intranet_ip = detect_intranet_ip();
+                            }
                             let total_kb = m.gui_kb.saturating_add(m.core_kb);
                             if app.mem_history.len() >= 24 {
                                 app.mem_history.pop_front();
