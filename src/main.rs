@@ -853,10 +853,13 @@ impl eframe::App for FutureProxyApp {
         {
             let mut app = self.state.lock().unwrap();
 
-            // === Left Panel: FlClash Collapsible Navigation Drawer ===
+            // === Left Panel: FlClash Collapsible Navigation Drawer (Responsive Auto-Collapse on < 840px) ===
+            let screen_w = ctx.screen_rect().width();
+            let auto_narrow = screen_w < 840.0;
+            let is_expanded = !app.sidebar_collapsed && !auto_narrow;
             let drawer_t = ctx.animate_bool_with_time(
                 egui::Id::new("fl_drawer_collapse"),
-                !app.sidebar_collapsed,
+                is_expanded,
                 0.24,
             );
             let drawer_w = 60.0 + (168.0 - 60.0) * ease_emphasized(drawer_t);
@@ -1023,14 +1026,15 @@ impl eframe::App for FutureProxyApp {
 
             // === Central Panel ===
             let mut hover_tooltip: Option<(egui::Pos2, &'static str)> = None;
+            let h_pad = if auto_narrow { 12.0 } else { 18.0 };
 
             egui::CentralPanel::default()
                 .frame(
                     egui::Frame::none()
                         .fill(pal.bg_window)
                         .inner_margin(egui::Margin {
-                            left: 18.0,
-                            right: 18.0,
+                            left: h_pad,
+                            right: h_pad,
                             top: 16.0,
                             bottom: 12.0,
                         }),
@@ -1385,7 +1389,7 @@ fn native_options() -> eframe::NativeOptions {
     eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1060.0, 660.0])
-            .with_min_inner_size([760.0, 500.0])
+            .with_min_inner_size([620.0, 480.0])
             .with_icon(Arc::new(icon))
             .with_title("Future Proxy"),
         run_and_return: true,

@@ -75,7 +75,8 @@ pub fn render_proxies_tab(
             let search_active = app.search_expanded || !app.search_keyword.is_empty();
             let search_t =
                 ctx.animate_bool_with_time(ui.id().with("fl_search_capsule"), search_active, 0.24);
-            let cap_w = 78.0 + (240.0 - 78.0) * ease_emphasized(search_t);
+            let max_cap_w = (ui.available_width() - 60.0).clamp(110.0, 240.0);
+            let cap_w = 78.0 + (max_cap_w - 78.0) * ease_emphasized(search_t);
             let (cap_rect, _) =
                 ui.allocate_exact_size(egui::vec2(cap_w, 38.0), egui::Sense::hover());
             let cp = ui.painter().clone();
@@ -335,7 +336,7 @@ pub fn render_proxies_tab(
             let gap = 12.0_f32;
             ui.spacing_mut().item_spacing = egui::vec2(gap, gap);
             let avail = ui.available_width();
-            let cols = ((avail + gap) / (min_col_w + gap)).floor().max(1.0) as usize;
+            let cols = ((avail + gap) / (min_col_w + gap)).floor().clamp(2.0, 12.0) as usize;
             let card_w = (avail - gap * (cols as f32 - 1.0)) / cols as f32;
 
             for row in filtered_nodes.chunks(cols) {
@@ -828,7 +829,7 @@ pub fn render_more_popover(ctx: &egui::Context, app: &mut AppState, pal: &ThemeP
                         &mut y,
                         "lay_grid",
                         None,
-                        "网格 (6列)",
+                        "响应式网格",
                         None,
                         app.profiles.card_size != "loose",
                     ) {
@@ -842,7 +843,7 @@ pub fn render_more_popover(ctx: &egui::Context, app: &mut AppState, pal: &ThemeP
                         &mut y,
                         "lay_wide",
                         None,
-                        "宽卡 (4列)",
+                        "响应式宽卡",
                         None,
                         app.profiles.card_size == "loose",
                     ) {
@@ -890,7 +891,7 @@ pub fn render_import_modal(
                 egui::Color32::from_rgba_unmultiplied(0, 0, 0, 120),
             );
 
-            let sheet_w = 430.0;
+            let sheet_w = (screen_rect.width() - 32.0).clamp(280.0, 430.0);
             let sheet_h = 250.0;
             let sheet_rect =
                 egui::Rect::from_center_size(screen_rect.center(), egui::vec2(sheet_w, sheet_h));
