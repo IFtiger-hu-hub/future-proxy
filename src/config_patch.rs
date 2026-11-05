@@ -528,6 +528,11 @@ dns:
     - "*.msftncsi.com"
     - "connectivitycheck.gstatic.com"
     - "captive.apple.com"
+    - "+.wechat.com"
+    - "+.weixin.qq.com"
+    - "+.qq.com"
+    - "+.qpic.cn"
+    - "+.qlogo.cn"
   default-nameserver:
     - 223.5.5.5
     - 119.29.29.29
@@ -571,7 +576,7 @@ profile:
 
 tun:
   enable: {tun}
-  stack: mixed
+  stack: gvisor
   device: Mihomo
   mtu: 9000
   strict-route: false
@@ -609,6 +614,11 @@ sniffer:
     - "Mijia Cloud"
     - "+.push.apple.com"
     - "+.apple.com"
+    - "+.wechat.com"
+    - "+.weixin.qq.com"
+    - "+.qq.com"
+    - "+.qpic.cn"
+    - "+.qlogo.cn"
     - "+.stun.*.*"{dns_section}
 {end}"#,
         begin = PATCH_BEGIN,
@@ -808,9 +818,13 @@ rules:
             }
             let active_sub = profiles_dir.join("sub_1793770259.yaml");
             if active_sub.exists() {
+                let active_cfg_path = cfg_dir.join("config.yaml");
+                let cur_tun = std::fs::read_to_string(&active_cfg_path)
+                    .map(|c| c.contains("tun:\n  enable: true"))
+                    .unwrap_or(false);
                 let raw = std::fs::read_to_string(&active_sub).unwrap();
-                let patched = patch_subscription_with_mode(&raw, false, "rule");
-                std::fs::write(cfg_dir.join("config.yaml"), &patched).unwrap();
+                let patched = patch_subscription_with_mode(&raw, cur_tun, "rule");
+                std::fs::write(active_cfg_path, &patched).unwrap();
             }
         }
     }

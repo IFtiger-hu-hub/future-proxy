@@ -6,12 +6,13 @@ log-level: warning
 ipv6: false
 
 external-controller: 127.0.0.1:9090
-secret: "mihomo-secret"
+secret: "future-proxy-secret"
 external-ui: ui
 
 tun:
-  enable: true
-  stack: mixed
+  enable: false
+  stack: gvisor
+  device: Mihomo
   dns-hijack:
     - "any:53"
   auto-route: true

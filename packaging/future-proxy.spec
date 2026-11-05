@@ -3,7 +3,7 @@
 %undefine _missing_build_ids_terminate_build
 
 Name:           future-proxy
-Version:        1.0.8
+Version:        1.0.9
 Release:        1%{?dist}
 Summary:        Ultra-lightweight Native GUI Proxy Client (Future Proxy)
 License:        GPL-3.0
@@ -46,7 +46,7 @@ install -m 644 %{SOURCE6} %{buildroot}%{_datadir}/future-proxy/geosite.dat
 install -m 644 %{SOURCE8} %{buildroot}%{_userunitdir}/future-proxy.service
 
 %post
-setcap 'cap_net_admin,cap_net_bind_service=+ep' %{_bindir}/future-proxy-core 2>/dev/null || true
+setcap 'cap_net_admin,cap_net_bind_service,cap_net_raw=+ep' %{_bindir}/future-proxy-core 2>/dev/null || true
 pkill -x future-proxy 2>/dev/null || true
 
 if [ -x %{_bindir}/gtk-update-icon-cache ]; then
