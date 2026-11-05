@@ -1,18 +1,24 @@
 # Future Proxy
 
-Ultra-lightweight Standalone Native GUI Proxy Client written in Rust (`eframe` / `egui`) with a 100% custom Apple Cupertino Dark Mode design system and built-in Mihomo kernel management.
+Ultra-lightweight Standalone Native GUI Proxy Client written in Rust (`eframe` / `egui`) with a custom Bento Grid design system and built-in Mihomo kernel management.
+
+![Future Proxy Dashboard](assets/dashboard.png)
 
 ## 核心特性
 
-- **纯正 Apple Cupertino 界面**：全矢量自绘的 Cupertino 控件体系（Segmented Control、iOS/macOS Switch、Pop-up Button、高密度节点卡片），零外部前端框架依赖。
-- **极致轻量与低内存占用**：
-  - 内核后台守护常驻仅约 **45 ~ 60 MB**。
-  - 关闭主窗口回收到系统托盘后，GUI 自动释放显存与工作集（`malloc_trim` / `K32EmptyWorkingSet`），后台驻留仅 **~6 ~ 8 MB**。
+- **原生矢量 Bento Grid 界面**：
+  - 全矢量自绘 Bento 仪表盘（实时上下行速率波形图、一键节点连通性测试、服务状态双路探活、订阅配额正弦波浪进度条、6 列高密度节点网格卡片），支持浅色与深色双主题切换，零 WebView / Electron 依赖。
+- **精细化内存监控与一键释放**：
+  - 实时区分采集 **GUI 私有堆内存 (`RssAnon`)**、**含共享显存/字体的总驻留集 (`VmRSS`)**、**Mihomo 内核占用** 与 **宿主系统物理内存 (`/proc/meminfo`)**。
+  - 仪表盘与工具页均支持一键 **`[ ↻ 释放 ]`** 闲置内存（调用 `malloc_trim(0)` / `K32EmptyWorkingSet` 立即将空闲堆页归还操作系统）。
+  - 关闭主窗口回收到系统托盘后，自动销毁渲染上下文并释放显存，后台驻留仅 **~6 ~ 8 MB**。
 - **内核级区域锁定与自动容灾（Auto-Failover）**：
-  - 自动在订阅中注入 `⚡ 🌍 非港台-自动优选`（自动过滤香港/澳门/台湾/中国大陆节点，保障 AI 与流媒体服务可用）及各主流地区最优组（新加坡 / 日本 / 美国 / 香港）。
+  - 自动在订阅中注入 `⚡ 🌍 非港台-自动优选`（自动过滤香港/澳门/台湾/中国大陆及信息提示节点，保障 AI 与流媒体服务可用）及各主流地区最优组（新加坡 / 日本 / 美国 / 香港）。
   - 即使完全关闭前端界面，后台内核依然每 180 秒自动探活并在节点超时时毫秒级无感切换到可用节点。
+- **高内聚模块化架构**：
+  - 按职责划分为 [`main.rs`](src/main.rs)、[`state.rs`](src/state.rs)、[`core_api.rs`](src/core_api.rs)、[`config_patch.rs`](src/config_patch.rs)、[`platform.rs`](src/platform.rs)、[`theme.rs`](src/theme.rs)、[`ui_dashboard.rs`](src/ui_dashboard.rs)、[`ui_proxies.rs`](src/ui_proxies.rs) 与 [`ui_tabs.rs`](src/ui_tabs.rs) 九大模块。
 - **跨平台原生支持（Linux & Windows 10/11）**：
-  - **Linux**：支持 `systemd --user` 后台服务守护、KDE/桌面系统代理自动配置、StatusNotifierItem (`ksni`) 系统托盘与 RPM 一键打包。
+  - **Linux**：支持 `systemd --user` 后台服务守护、KDE 桌面系统代理自动配置、StatusNotifierItem (`ksni`) 系统托盘与 RPM 一键打包。
   - **Windows 10 / 11**：原生 Win32 系统托盘（`Shell_NotifyIconW`）、WinInet 注册表系统代理热切换、计划任务（`schtasks`）/ 注册表 `Run` 开机静默自启（`CREATE_NO_WINDOW` 无黑框）、自动加载系统微软雅黑字体。
 
 ## 开发与编译
