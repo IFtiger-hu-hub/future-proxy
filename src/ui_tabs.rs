@@ -8,8 +8,8 @@ use crate::platform::set_autostart;
 use crate::state::{AppState, Subscription};
 use crate::theme::{
     cup_font_med, cup_font_reg, cupertino_button, draw_bento_card, draw_cup_icon, draw_flag_icon,
-    draw_sf_checkmark, draw_wave_progress, format_cupertino_title, md3_switch, CupBtnStyle,
-    CupIcon, ThemePalette,
+    draw_sf_checkmark, draw_wave_progress, ellipsize_text, format_cupertino_title, md3_switch,
+    CupBtnStyle, CupIcon, ThemePalette,
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -21,28 +21,32 @@ pub fn render_profiles_tab(
     action_delete_sub: &mut Option<String>,
     action_switch_sub: &mut Option<String>,
 ) {
-    ui.horizontal(|ui| {
-        let title_g = ui.fonts(|f| {
-            f.layout_no_wrap("配置".to_string(), cup_font_med(21.0), pal.text_primary)
-        });
-        let (t_rect, _) = ui.allocate_exact_size(title_g.size(), egui::Sense::hover());
-        ui.painter().galley(t_rect.min, title_g, pal.text_primary);
+    egui::Frame::none()
+        .inner_margin(egui::Margin::symmetric(6.0, 0.0))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let title_g = ui.fonts(|f| {
+                    f.layout_no_wrap("配置".to_string(), cup_font_med(19.5), pal.text_primary)
+                });
+                let (t_rect, _) = ui.allocate_exact_size(title_g.size(), egui::Sense::hover());
+                ui.painter().galley(t_rect.min, title_g, pal.text_primary);
 
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if cupertino_button(
-                ui,
-                "导入新订阅",
-                Some(CupIcon::Plus),
-                CupBtnStyle::Filled(pal.primary),
-                true,
-                pal,
-            ) {
-                app.show_import_dialog = true;
-            }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if cupertino_button(
+                        ui,
+                        "导入新订阅",
+                        Some(CupIcon::Plus),
+                        CupBtnStyle::Filled(pal.primary),
+                        true,
+                        pal,
+                    ) {
+                        app.show_import_dialog = true;
+                    }
+                });
+            });
         });
-    });
 
-    ui.add_space(16.0);
+    ui.add_space(10.0);
 
     let subs = app.profiles.subscriptions.clone();
     let active_id = app.profiles.active.clone();
@@ -308,179 +312,211 @@ pub fn render_profiles_tab(
 }
 
 pub fn render_connections_tab(ui: &mut egui::Ui, app: &mut AppState, pal: &ThemePalette) {
-    ui.horizontal(|ui| {
-        let title_g = ui.fonts(|f| {
-            f.layout_no_wrap(
-                format!("实时连接 ({})", app.active_connections),
-                cup_font_med(21.0),
-                pal.text_primary,
-            )
+    egui::Frame::none()
+        .inner_margin(egui::Margin::symmetric(6.0, 0.0))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let title_g = ui.fonts(|f| {
+                    f.layout_no_wrap(
+                        format!("实时连接 ({})", app.active_connections),
+                        cup_font_med(19.5),
+                        pal.text_primary,
+                    )
+                });
+                let (t_rect, _) = ui.allocate_exact_size(title_g.size(), egui::Sense::hover());
+                ui.painter().galley(t_rect.min, title_g, pal.text_primary);
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if cupertino_button(
+                        ui,
+                        "断开全部旧连接",
+                        Some(CupIcon::Close),
+                        CupBtnStyle::Tinted(pal.primary),
+                        true,
+                        pal,
+                    ) {
+                        close_all_connections();
+                        app.status_msg = "已清理全部活跃长连接".to_string();
+                    }
+                });
+            });
         });
-        let (t_rect, _) = ui.allocate_exact_size(title_g.size(), egui::Sense::hover());
-        ui.painter().galley(t_rect.min, title_g, pal.text_primary);
 
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if cupertino_button(
-                ui,
-                "断开全部旧连接",
-                Some(CupIcon::Close),
-                CupBtnStyle::Tinted(pal.primary),
-                true,
-                pal,
-            ) {
-                close_all_connections();
-                app.status_msg = "已清理全部活跃长连接".to_string();
-            }
-        });
-    });
+    ui.add_space(8.0);
 
-    ui.add_space(14.0);
-
-    // Top Summary Bento Card
-    let (c_rect, _) =
-        ui.allocate_exact_size(egui::vec2(ui.available_width(), 80.0), egui::Sense::hover());
-    let cp = ui.painter().clone();
-    draw_bento_card(&cp, c_rect, 16.0, pal.bg_card, pal);
-    cp.text(
-        egui::pos2(c_rect.left() + 20.0, c_rect.top() + 26.0),
-        egui::Align2::LEFT_CENTER,
-        format!(
-            "实时下行：{}   ·   实时上行：{}   ·   累计下载：{}   ·   累计上传：{}",
-            format_speed(app.download_rate),
-            format_speed(app.upload_rate),
-            format_bytes(app.total_download),
-            format_bytes(app.total_upload)
-        ),
-        cup_font_med(13.5),
-        pal.text_primary,
-    );
-    cp.text(
-        egui::pos2(c_rect.left() + 20.0, c_rect.bottom() - 22.0),
-        egui::Align2::LEFT_CENTER,
-        format!(
-            "当前出站节点：{}   ·   切换节点自动清理旧连接已启用",
-            format_cupertino_title(&app.current_selected)
-        ),
-        cup_font_reg(11.5),
-        pal.text_secondary,
-    );
-
-    ui.add_space(14.0);
-
-    // Live Connections Table Bento Card — 自动撑满剩余视口高度并根据高度动态渲染更多连接行
-    let table_h = (ui.available_height() - 4.0).max(200.0);
-    let (t_card, _) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), table_h),
-        egui::Sense::hover(),
-    );
-    let tp = ui.painter().clone();
-    draw_bento_card(&tp, t_card, 16.0, pal.bg_card, pal);
-
-    let col_x = [
-        t_card.left() + 20.0,
-        t_card.left() + t_card.width() * 0.22,
-        t_card.left() + t_card.width() * 0.56,
-        t_card.left() + t_card.width() * 0.78,
-        t_card.left() + t_card.width() * 0.90,
-    ];
-    let headers = ["来源进程 / 网络", "目标地址 (Host:Port)", "出口策略链", "下载流量", "上传流量"];
-    for (hi, h_lbl) in headers.iter().enumerate() {
-        tp.text(
-            egui::pos2(col_x[hi], t_card.top() + 22.0),
-            egui::Align2::LEFT_CENTER,
-            *h_lbl,
-            cup_font_med(11.5),
-            pal.text_secondary,
-        );
-    }
-    tp.line_segment(
-        [
-            egui::pos2(t_card.left() + 18.0, t_card.top() + 38.0),
-            egui::pos2(t_card.right() - 18.0, t_card.top() + 38.0),
-        ],
-        egui::Stroke::new(0.8_f32, pal.border),
-    );
-
-    if app.live_connections.is_empty() {
-        tp.text(
-            egui::pos2(t_card.center().x, t_card.center().y + 10.0),
-            egui::Align2::CENTER_CENTER,
-            "当前暂无活跃连接",
-            cup_font_reg(12.5),
-            pal.text_secondary,
-        );
-    } else {
-        let max_rows = ((table_h - 54.0) / 36.0).floor().max(5.0) as usize;
-        for (ri, item) in app.live_connections.iter().take(max_rows).enumerate() {
-            let ry = t_card.top() + 58.0 + ri as f32 * 36.0;
-            if ry + 14.0 > t_card.bottom() {
-                break;
-            }
-            let badge_r = egui::Rect::from_center_size(
-                egui::pos2(col_x[0] + 9.0, ry),
-                egui::vec2(18.0, 18.0),
-            );
-            tp.rect_filled(badge_r, 5.0, pal.surface_container);
-            let ch = item
-                .source
-                .chars()
-                .next()
-                .unwrap_or('N')
-                .to_ascii_uppercase();
-            tp.text(
-                badge_r.center(),
-                egui::Align2::CENTER_CENTER,
-                ch.to_string(),
-                cup_font_med(9.5),
-                pal.primary,
-            );
-            tp.text(
-                egui::pos2(col_x[0] + 24.0, ry),
+    egui::Frame::none()
+        .inner_margin(egui::Margin::symmetric(6.0, 6.0))
+        .show(ui, |ui| {
+            // Top Summary Bento Card
+            let (c_rect, _) =
+                ui.allocate_exact_size(egui::vec2(ui.available_width(), 80.0), egui::Sense::hover());
+            let cp = ui.painter().clone();
+            draw_bento_card(&cp, c_rect, 16.0, pal.bg_card, pal);
+            cp.text(
+                egui::pos2(c_rect.left() + 20.0, c_rect.top() + 26.0),
                 egui::Align2::LEFT_CENTER,
-                &item.source,
-                cup_font_med(12.0),
+                format!(
+                    "实时下行：{}   ·   实时上行：{}   ·   累计下载：{}   ·   累计上传：{}",
+                    format_speed(app.download_rate),
+                    format_speed(app.upload_rate),
+                    format_bytes(app.total_download),
+                    format_bytes(app.total_upload)
+                ),
+                cup_font_med(13.5),
                 pal.text_primary,
             );
-            tp.text(
-                egui::pos2(col_x[1], ry),
+            cp.text(
+                egui::pos2(c_rect.left() + 20.0, c_rect.bottom() - 22.0),
                 egui::Align2::LEFT_CENTER,
-                &item.target,
-                cup_font_reg(12.0),
+                format!(
+                    "当前出站节点：{}   ·   切换节点自动清理旧连接已启用",
+                    format_cupertino_title(&app.current_selected)
+                ),
+                cup_font_reg(11.5),
                 pal.text_secondary,
             );
-            let ext_flag = match_flag(&item.exit);
-            let mut ext_x = col_x[2];
-            if !matches!(ext_flag, "DIR" | "AUTO" | "FAIL" | "NET") {
-                let f_rect = egui::Rect::from_center_size(
-                    egui::pos2(ext_x + 7.0, ry),
-                    egui::vec2(13.0, 9.5),
+
+            ui.add_space(14.0);
+
+            // Live Connections Table Bento Card — 自动撑满剩余视口高度并根据高度动态渲染更多连接行
+            let table_h = (ui.available_height() - 4.0).max(200.0);
+            let (t_card, _) = ui.allocate_exact_size(
+                egui::vec2(ui.available_width(), table_h),
+                egui::Sense::hover(),
+            );
+            let tp = ui.painter().clone();
+            draw_bento_card(&tp, t_card, 16.0, pal.bg_card, pal);
+
+            let col_x = [
+                t_card.left() + 20.0,
+                t_card.left() + t_card.width() * 0.21,
+                t_card.left() + t_card.width() * 0.54,
+                t_card.left() + t_card.width() * 0.78,
+                t_card.left() + t_card.width() * 0.90,
+            ];
+            let headers = [
+                "来源进程 / 网络",
+                "目标地址 (Host:Port)",
+                "出口策略链",
+                "下载流量",
+                "上传流量",
+            ];
+            for (hi, h_lbl) in headers.iter().enumerate() {
+                tp.text(
+                    egui::pos2(col_x[hi], t_card.top() + 22.0),
+                    egui::Align2::LEFT_CENTER,
+                    *h_lbl,
+                    cup_font_med(11.5),
+                    pal.text_secondary,
                 );
-                draw_flag_icon(&tp, f_rect, ext_flag, pal);
-                ext_x += 18.0;
             }
-            tp.text(
-                egui::pos2(ext_x, ry),
-                egui::Align2::LEFT_CENTER,
-                format_cupertino_title(&item.exit),
-                cup_font_reg(12.0),
-                pal.text_secondary,
+            tp.line_segment(
+                [
+                    egui::pos2(t_card.left() + 18.0, t_card.top() + 38.0),
+                    egui::pos2(t_card.right() - 18.0, t_card.top() + 38.0),
+                ],
+                egui::Stroke::new(0.8_f32, pal.border),
             );
-            tp.text(
-                egui::pos2(col_x[3], ry),
-                egui::Align2::LEFT_CENTER,
-                format_bytes(item.download),
-                cup_font_med(11.5),
-                pal.text_primary,
-            );
-            tp.text(
-                egui::pos2(col_x[4], ry),
-                egui::Align2::LEFT_CENTER,
-                format_bytes(item.upload),
-                cup_font_med(11.5),
-                pal.text_secondary,
-            );
-        }
-    }
+
+            if app.live_connections.is_empty() {
+                tp.text(
+                    egui::pos2(t_card.center().x, t_card.center().y + 10.0),
+                    egui::Align2::CENTER_CENTER,
+                    "当前暂无活跃连接",
+                    cup_font_reg(12.5),
+                    pal.text_secondary,
+                );
+            } else {
+                let max_rows = ((table_h - 54.0) / 36.0).floor().max(5.0) as usize;
+                for (ri, item) in app.live_connections.iter().take(max_rows).enumerate() {
+                    let ry = t_card.top() + 58.0 + ri as f32 * 36.0;
+                    if ry + 14.0 > t_card.bottom() {
+                        break;
+                    }
+                    let badge_r = egui::Rect::from_center_size(
+                        egui::pos2(col_x[0] + 9.0, ry),
+                        egui::vec2(18.0, 18.0),
+                    );
+                    tp.rect_filled(badge_r, 5.0, pal.surface_container);
+                    let ch = item
+                        .source
+                        .chars()
+                        .next()
+                        .unwrap_or('N')
+                        .to_ascii_uppercase();
+                    tp.text(
+                        badge_r.center(),
+                        egui::Align2::CENTER_CENTER,
+                        ch.to_string(),
+                        cup_font_med(9.5),
+                        pal.primary,
+                    );
+                    let src_txt = ellipsize_text(
+                        ui,
+                        &item.source,
+                        cup_font_med(12.0),
+                        (col_x[1] - (col_x[0] + 24.0) - 12.0).max(32.0),
+                    );
+                    tp.text(
+                        egui::pos2(col_x[0] + 24.0, ry),
+                        egui::Align2::LEFT_CENTER,
+                        src_txt,
+                        cup_font_med(12.0),
+                        pal.text_primary,
+                    );
+                    let dst_txt = ellipsize_text(
+                        ui,
+                        &item.target,
+                        cup_font_reg(12.0),
+                        (col_x[2] - col_x[1] - 14.0).max(48.0),
+                    );
+                    tp.text(
+                        egui::pos2(col_x[1], ry),
+                        egui::Align2::LEFT_CENTER,
+                        dst_txt,
+                        cup_font_reg(12.0),
+                        pal.text_secondary,
+                    );
+                    let ext_flag = match_flag(&item.exit);
+                    let mut ext_x = col_x[2];
+                    if !matches!(ext_flag, "DIR" | "AUTO" | "FAIL" | "NET") {
+                        let f_rect = egui::Rect::from_center_size(
+                            egui::pos2(ext_x + 7.0, ry),
+                            egui::vec2(13.0, 9.5),
+                        );
+                        draw_flag_icon(&tp, f_rect, ext_flag, pal);
+                        ext_x += 18.0;
+                    }
+                    let ext_txt = ellipsize_text(
+                        ui,
+                        &format_cupertino_title(&item.exit),
+                        cup_font_reg(12.0),
+                        (col_x[3] - ext_x - 14.0).max(36.0),
+                    );
+                    tp.text(
+                        egui::pos2(ext_x, ry),
+                        egui::Align2::LEFT_CENTER,
+                        ext_txt,
+                        cup_font_reg(12.0),
+                        pal.text_secondary,
+                    );
+                    tp.text(
+                        egui::pos2(col_x[3], ry),
+                        egui::Align2::LEFT_CENTER,
+                        format_bytes(item.download),
+                        cup_font_med(11.5),
+                        pal.text_primary,
+                    );
+                    tp.text(
+                        egui::pos2(col_x[4], ry),
+                        egui::Align2::LEFT_CENTER,
+                        format_bytes(item.upload),
+                        cup_font_med(11.5),
+                        pal.text_secondary,
+                    );
+                }
+            }
+        });
 }
 
 pub fn render_tools_tab(
@@ -491,12 +527,16 @@ pub fn render_tools_tab(
     toggle_tun: &mut Option<bool>,
     action_trim_mem: &mut bool,
 ) {
-    let title_g = ui.fonts(|f| {
-        f.layout_no_wrap("工具".to_string(), cup_font_med(21.0), pal.text_primary)
-    });
-    let (t_rect, _) = ui.allocate_exact_size(title_g.size(), egui::Sense::hover());
-    ui.painter().galley(t_rect.min, title_g, pal.text_primary);
-    ui.add_space(16.0);
+    egui::Frame::none()
+        .inner_margin(egui::Margin::symmetric(6.0, 0.0))
+        .show(ui, |ui| {
+            let title_g = ui.fonts(|f| {
+                f.layout_no_wrap("工具".to_string(), cup_font_med(19.5), pal.text_primary)
+            });
+            let (t_rect, _) = ui.allocate_exact_size(title_g.size(), egui::Sense::hover());
+            ui.painter().galley(t_rect.min, title_g, pal.text_primary);
+        });
+    ui.add_space(10.0);
 
     egui::ScrollArea::vertical()
         .id_salt("tools_list_scroll")

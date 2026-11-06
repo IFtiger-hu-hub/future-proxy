@@ -14,80 +14,78 @@ pub fn render_proxies_tab(
     hover_tooltip: &mut Option<(egui::Pos2, &'static str)>,
 ) {
     // --- Row 1: Title "代理" on Left + Unified White Pill `[ 🔍  ⚡ ]` & Circular `( ⋮ )` on Right ---
-    ui.horizontal(|ui| {
-        let title_g = ui.fonts(|f| {
-            f.layout_no_wrap("代理".to_string(), cup_font_med(19.5), pal.text_primary)
-        });
-        let (t_rect, _) = ui.allocate_exact_size(title_g.size(), egui::Sense::hover());
-        ui.painter().galley(t_rect.min, title_g, pal.text_primary);
+    egui::Frame::none()
+        .inner_margin(egui::Margin::symmetric(6.0, 0.0))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let title_g = ui.fonts(|f| {
+                    f.layout_no_wrap("代理".to_string(), cup_font_med(19.5), pal.text_primary)
+                });
+                let (t_rect, _) = ui.allocate_exact_size(title_g.size(), egui::Sense::hover());
+                ui.painter().galley(t_rect.min, title_g, pal.text_primary);
 
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.spacing_mut().item_spacing.x = 8.0;
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
 
-            // 1. Rightmost Circular White `( ⋮ )` More Button (38x38)
-            let is_more_open = app.open_popup.as_deref() == Some("more");
-            let (more_rect, more_resp) =
-                ui.allocate_exact_size(egui::vec2(38.0, 38.0), egui::Sense::click());
-            if more_resp.hovered() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                if !is_more_open {
-                    *hover_tooltip = Some((
-                        egui::pos2(more_rect.center().x, more_rect.bottom() + 14.0),
-                        "更多",
-                    ));
-                }
-            }
-            let more_scale = interact_spring_scale(
-                ctx,
-                more_resp.id,
-                more_resp.is_pointer_button_down_on(),
-                more_resp.hovered(),
-            );
-            let mr = scale_rect(more_rect, more_scale);
-            let mp = ui.painter();
-            if !pal.dark {
-                mp.circle_filled(mr.center() + egui::vec2(0.0, 1.5), 19.0, pal.shadow);
-            }
-            mp.circle_filled(
-                mr.center(),
-                19.0,
-                if more_resp.hovered() {
-                    pal.bg_card_hover
-                } else {
-                    pal.bg_card
-                },
-            );
-            draw_cup_icon(&mp, CupIcon::MoreVert, mr.center(), pal.text_primary);
-            if more_resp.clicked() {
-                if is_more_open {
-                    app.open_popup = None;
-                    app.more_submenu = None;
-                } else {
-                    app.open_popup = Some("more".to_string());
-                    app.more_submenu = None;
-                    app.popup_anchor = egui::pos2(more_rect.right(), more_rect.top());
-                    app.popup_width = 148.0;
-                    app.popup_open_time = ctx.input(|i| i.time);
-                }
-            }
+                    // 1. Rightmost Circular White `( ⋮ )` More Button (38x38)
+                    let is_more_open = app.open_popup.as_deref() == Some("more");
+                    let (more_rect, more_resp) =
+                        ui.allocate_exact_size(egui::vec2(38.0, 38.0), egui::Sense::click());
+                    if more_resp.hovered() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        if !is_more_open {
+                            *hover_tooltip = Some((
+                                egui::pos2(more_rect.center().x, more_rect.bottom() + 14.0),
+                                "更多",
+                            ));
+                        }
+                    }
+                    let more_scale = interact_spring_scale(
+                        ctx,
+                        more_resp.id,
+                        more_resp.is_pointer_button_down_on(),
+                        more_resp.hovered(),
+                    );
+                    let mr = scale_rect(more_rect, more_scale);
+                    let mp = ui.painter();
+                    draw_bento_card(
+                        &mp,
+                        mr,
+                        19.0,
+                        if more_resp.hovered() {
+                            pal.bg_card_hover
+                        } else {
+                            pal.bg_card
+                        },
+                        pal,
+                    );
+                    draw_cup_icon(&mp, CupIcon::MoreVert, mr.center(), pal.text_primary);
+                    if more_resp.clicked() {
+                        if is_more_open {
+                            app.open_popup = None;
+                            app.more_submenu = None;
+                        } else {
+                            app.open_popup = Some("more".to_string());
+                            app.more_submenu = None;
+                            app.popup_anchor = egui::pos2(more_rect.right(), more_rect.top());
+                            app.popup_width = 148.0;
+                            app.popup_open_time = ctx.input(|i| i.time);
+                        }
+                    }
 
-            // 2. Unified White Capsule `[ 🔍   ⚡ ]` (Morphs wider when search is active!)
-            let search_active = app.search_expanded || !app.search_keyword.is_empty();
-            let search_t =
-                ctx.animate_bool_with_time(ui.id().with("fl_search_capsule"), search_active, 0.24);
-            let max_cap_w = (ui.available_width() - 60.0).clamp(110.0, 240.0);
-            let cap_w = 78.0 + (max_cap_w - 78.0) * ease_emphasized(search_t);
-            let (cap_rect, _) =
-                ui.allocate_exact_size(egui::vec2(cap_w, 38.0), egui::Sense::hover());
-            let cp = ui.painter().clone();
-            if !pal.dark {
-                cp.rect_filled(
-                    cap_rect.translate(egui::vec2(0.0, 1.5)),
-                    19.0,
-                    pal.shadow,
-                );
-            }
-            cp.rect_filled(cap_rect, 19.0, pal.bg_card);
+                    // 2. Unified White Capsule `[ 🔍   ⚡ ]` (Morphs wider when search is active!)
+                    let search_active = app.search_expanded || !app.search_keyword.is_empty();
+                    let search_t = ctx.animate_bool_with_time(
+                        ui.id().with("fl_search_capsule"),
+                        search_active,
+                        0.24,
+                    );
+                    let max_cap_w = (ui.available_width() - 60.0).clamp(110.0, 240.0);
+                    let cap_w = 78.0 + (max_cap_w - 78.0) * ease_emphasized(search_t);
+                    let (cap_rect, _) =
+                        ui.allocate_exact_size(egui::vec2(cap_w, 38.0), egui::Sense::hover());
+                    let cp = ui.painter().clone();
+                    draw_bento_card(&cp, cap_rect, 19.0, pal.bg_card, pal);
 
             // Right half of capsule: Bolt `⚡` Speed Test button
             let bolt_rect = egui::Rect::from_min_max(
@@ -196,78 +194,83 @@ pub fn render_proxies_tab(
                     }
                 }
             }
-        });
-    });
-
-    ui.add_space(12.0);
-
-    // --- Row 2: FlClash Strategy Group Capsule Pills (e.g. `[ 节点选择 ]` in Solid Blue) ---
-    let display_groups: Vec<String> = if app.groups.is_empty() {
-        vec!["节点选择".to_string()]
-    } else {
-        app.groups.clone()
-    };
-    let active_group = if app.group_name.is_empty() {
-        display_groups[0].clone()
-    } else {
-        app.group_name.clone()
-    };
-
-    egui::ScrollArea::horizontal()
-        .id_salt("group_tabs_scroll")
-        .auto_shrink([false, true])
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 8.0;
-                for g_name in display_groups {
-                    let is_cur = g_name == active_group;
-                    let clean_g = format_cupertino_title(&g_name);
-                    let g_galley = ui.fonts(|f| {
-                        f.layout_no_wrap(clean_g.clone(), cup_font_med(12.5), pal.text_primary)
-                    });
-                    let tab_w = (g_galley.size().x + 26.0).max(74.0);
-                    let (tab_rect, tab_resp) =
-                        ui.allocate_exact_size(egui::vec2(tab_w, 32.0), egui::Sense::click());
-                    if tab_resp.hovered() {
-                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                    }
-                    let scale = interact_spring_scale(
-                        ctx,
-                        tab_resp.id,
-                        tab_resp.is_pointer_button_down_on(),
-                        tab_resp.hovered(),
-                    );
-                    let tr = scale_rect(tab_rect, scale);
-                    let tp = ui.painter();
-                    if is_cur {
-                        tp.rect_filled(tr, 16.0, pal.primary);
-                    } else if tab_resp.hovered() {
-                        tp.rect_filled(tr, 16.0, pal.surface_hover);
-                    } else {
-                        tp.rect_filled(tr, 16.0, pal.surface_container);
-                    }
-                    let fg = if is_cur {
-                        pal.on_primary
-                    } else {
-                        pal.text_secondary
-                    };
-                    tp.text(
-                        tr.center(),
-                        egui::Align2::CENTER_CENTER,
-                        clean_g,
-                        cup_font_med(12.5),
-                        fg,
-                    );
-                    if tab_resp.clicked() && !is_cur {
-                        app.group_name = g_name;
-                        app.group_picked_by_user = true;
-                        app.nodes.clear();
-                    }
-                }
+                });
             });
+
+            ui.add_space(12.0);
+
+            // --- Row 2: FlClash Strategy Group Capsule Pills (e.g. `[ 节点选择 ]` in Solid Blue) ---
+            let display_groups: Vec<String> = if app.groups.is_empty() {
+                vec!["节点选择".to_string()]
+            } else {
+                app.groups.clone()
+            };
+            let active_group = if app.group_name.is_empty() {
+                display_groups[0].clone()
+            } else {
+                app.group_name.clone()
+            };
+
+            egui::ScrollArea::horizontal()
+                .id_salt("group_tabs_scroll")
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        for g_name in display_groups {
+                            let is_cur = g_name == active_group;
+                            let clean_g = format_cupertino_title(&g_name);
+                            let g_galley = ui.fonts(|f| {
+                                f.layout_no_wrap(
+                                    clean_g.clone(),
+                                    cup_font_med(12.5),
+                                    pal.text_primary,
+                                )
+                            });
+                            let tab_w = (g_galley.size().x + 26.0).max(74.0);
+                            let (tab_rect, tab_resp) = ui
+                                .allocate_exact_size(egui::vec2(tab_w, 32.0), egui::Sense::click());
+                            if tab_resp.hovered() {
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                            }
+                            let scale = interact_spring_scale(
+                                ctx,
+                                tab_resp.id,
+                                tab_resp.is_pointer_button_down_on(),
+                                tab_resp.hovered(),
+                            );
+                            let tr = scale_rect(tab_rect, scale);
+                            let tp = ui.painter();
+                            if is_cur {
+                                tp.rect_filled(tr, 16.0, pal.primary);
+                            } else if tab_resp.hovered() {
+                                tp.rect_filled(tr, 16.0, pal.surface_hover);
+                            } else {
+                                tp.rect_filled(tr, 16.0, pal.surface_container);
+                            }
+                            let fg = if is_cur {
+                                pal.on_primary
+                            } else {
+                                pal.text_secondary
+                            };
+                            tp.text(
+                                tr.center(),
+                                egui::Align2::CENTER_CENTER,
+                                clean_g,
+                                cup_font_med(12.5),
+                                fg,
+                            );
+                            if tab_resp.clicked() && !is_cur {
+                                app.group_name = g_name;
+                                app.group_picked_by_user = true;
+                                app.nodes.clear();
+                            }
+                        }
+                    });
+                });
         });
 
-    ui.add_space(12.0);
+    ui.add_space(6.0);
 
     // --- Row 3: FlClash 6-Column Pure White Node Cards Grid ---
     let keyword = app.search_keyword.to_lowercase();
@@ -379,6 +382,21 @@ pub fn render_proxies_tab(
 
                                 let painter = ui.painter();
                                 draw_bento_card(&painter, draw_rect, 11.0, fill, pal);
+                                if is_sel {
+                                    painter.rect_stroke(
+                                        draw_rect,
+                                        11.0,
+                                        egui::Stroke::new(
+                                            1.35_f32,
+                                            egui::Color32::from_rgba_unmultiplied(
+                                                pal.primary.r(),
+                                                pal.primary.g(),
+                                                pal.primary.b(),
+                                                125,
+                                            ),
+                                        ),
+                                    );
+                                }
 
                                 // --- Row 1: Optional Flag Icon + Node Name + Selected Blue Checkmark Circle `(✓)` ---
                                 let badge_code = if node.flag.is_empty() {

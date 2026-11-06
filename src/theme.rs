@@ -463,7 +463,7 @@ pub fn draw_sparkline_area(
     painter.add(egui::Shape::line(pts, egui::Stroke::new(1.75_f32, stroke_col)));
 }
 
-/// 精致胶囊进度条（兼具最小可视胶囊宽度与高光端点，解决 0.8% 等低占比下折线缩成一团的问题）
+/// 精致胶囊进度条（保证最小可视胶囊宽度，低占比下依然圆润清晰）
 pub fn draw_wave_progress(
     painter: &egui::Painter,
     rect: egui::Rect,
@@ -472,27 +472,61 @@ pub fn draw_wave_progress(
     track_col: egui::Color32,
 ) {
     let r = ratio.clamp(0.0, 1.0);
-    let bar_h = 6.0_f32;
+    let bar_h = rect.height().clamp(5.0, 7.5);
     let bar_rect = egui::Rect::from_center_size(rect.center(), egui::vec2(rect.width(), bar_h));
     let rounding = bar_h * 0.5;
 
     // 1. 完整圆角底轨
     painter.rect_filled(bar_rect, rounding, track_col);
 
-    // 2. 已用进度胶囊（只要 ratio > 0 就保证最小 14px 圆润胶囊可视宽度）
+    // 2. 已用进度胶囊（只要 ratio > 0 就保证最小圆润胶囊可视宽度）
     if r > 0.0005 {
-        let min_vis_w = 14.0_f32.min(bar_rect.width());
+        let min_vis_w = (bar_h * 2.2).min(bar_rect.width());
         let active_w = (bar_rect.width() * r).max(min_vis_w).min(bar_rect.width());
         let active_rect = egui::Rect::from_min_size(bar_rect.min, egui::vec2(active_w, bar_h));
         painter.rect_filled(active_rect, rounding, active_col);
+    }
+}
 
-        // 右端微光圆点装饰，提升精致度
-        let dot_c = egui::pos2(active_rect.right() - rounding, active_rect.center().y);
-        painter.circle_filled(
-            dot_c,
-            1.6,
-            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 190),
-        );
+/// 单行文本超出最大像素宽度时优雅截断并追加省略号 `…`，杜绝表格列重叠与半字裁切
+pub fn ellipsize_text(
+    ui: &egui::Ui,
+    text: &str,
+    font: egui::FontId,
+    max_width: f32,
+) -> String {
+    if max_width <= 8.0 || text.is_empty() {
+        return String::new();
+    }
+    let full_w = ui.fonts(|f| {
+        f.layout_no_wrap(text.to_string(), font.clone(), egui::Color32::WHITE)
+            .size()
+            .x
+    });
+    if full_w <= max_width {
+        return text.to_string();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let mut lo = 0usize;
+    let mut hi = chars.len();
+    while lo < hi {
+        let mid = (lo + hi + 1) / 2;
+        let candidate: String = chars[..mid].iter().collect::<String>() + "…";
+        let w = ui.fonts(|f| {
+            f.layout_no_wrap(candidate, font.clone(), egui::Color32::WHITE)
+                .size()
+                .x
+        });
+        if w <= max_width {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    if lo == 0 {
+        "…".to_string()
+    } else {
+        chars[..lo].iter().collect::<String>() + "…"
     }
 }
 

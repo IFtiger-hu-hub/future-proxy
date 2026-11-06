@@ -5,8 +5,8 @@ use crate::state::{AppState, NavTab};
 use crate::theme::{
     cup_font_med, cup_font_reg, draw_bento_card, draw_cup_icon, draw_flag_icon,
     draw_scalloped_flower_button, draw_sparkline_area, draw_status_wave_decor,
-    draw_wave_progress, format_cupertino_title, interact_spring_scale, md3_switch,
-    scale_rect, split_speed_parts, CupIcon, ThemePalette,
+    draw_wave_progress, ellipsize_text, format_cupertino_title, interact_spring_scale,
+    md3_switch, scale_rect, split_speed_parts, CupIcon, ThemePalette,
 };
 use eframe::egui;
 use std::collections::VecDeque;
@@ -31,70 +31,74 @@ pub fn render_dashboard_tab(
     pal: &ThemePalette,
 ) -> DashboardActions {
     let mut acts = DashboardActions::default();
+    let shadow_pad = 6.0_f32;
 
-    // === Top Header: "仪表盘" on left + Interactive "重启内核" Capsule Button on right ===
-    ui.horizontal(|ui| {
-        let title_g = ui.fonts(|f| {
-            f.layout_no_wrap("仪表盘".to_string(), cup_font_med(19.5), pal.text_primary)
+    // === Top Header: 与下方 Bento 网格共享左右 6px 边距，保证标题左缘与按钮右缘像素级对齐 ===
+    egui::Frame::none()
+        .inner_margin(egui::Margin::symmetric(shadow_pad, 0.0))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let title_g = ui.fonts(|f| {
+                    f.layout_no_wrap("仪表盘".to_string(), cup_font_med(19.5), pal.text_primary)
+                });
+                let (t_rect, _) = ui.allocate_exact_size(title_g.size(), egui::Sense::hover());
+                ui.painter().galley(t_rect.min, title_g, pal.text_primary);
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let (btn_rect, btn_resp) =
+                        ui.allocate_exact_size(egui::vec2(100.0, 32.0), egui::Sense::click());
+                    if btn_resp.hovered() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
+                    let b_scale = interact_spring_scale(
+                        ctx,
+                        btn_resp.id,
+                        btn_resp.is_pointer_button_down_on(),
+                        btn_resp.hovered(),
+                    );
+                    let br = scale_rect(btn_rect, b_scale);
+                    let bp = ui.painter().clone();
+                    let fill = if btn_resp.hovered() {
+                        pal.bg_card_hover
+                    } else {
+                        pal.bg_card
+                    };
+                    draw_bento_card(&bp, br, 16.0, fill, pal);
+
+                    let dot_col = if app.is_core_alive {
+                        egui::Color32::from_rgb(34, 197, 94)
+                    } else {
+                        pal.red
+                    };
+                    bp.circle_filled(egui::pos2(br.left() + 13.5, br.center().y), 3.5, dot_col);
+
+                    draw_cup_icon(
+                        &bp,
+                        CupIcon::Refresh,
+                        egui::pos2(br.left() + 27.0, br.center().y),
+                        pal.primary,
+                    );
+                    bp.text(
+                        egui::pos2(br.left() + 38.0, br.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        "重启内核",
+                        cup_font_med(11.5),
+                        pal.text_primary,
+                    );
+
+                    if btn_resp.clicked() {
+                        acts.restart_core = true;
+                    }
+                    if btn_resp.hovered() {
+                        btn_resp.on_hover_text("重启 Mihomo 核心进程并重新加载配置");
+                    }
+                });
+            });
         });
-        let (t_rect, _) = ui.allocate_exact_size(title_g.size(), egui::Sense::hover());
-        ui.painter().galley(t_rect.min, title_g, pal.text_primary);
 
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let (btn_rect, btn_resp) =
-                ui.allocate_exact_size(egui::vec2(98.0, 32.0), egui::Sense::click());
-            if btn_resp.hovered() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-            }
-            let b_scale = interact_spring_scale(
-                ctx,
-                btn_resp.id,
-                btn_resp.is_pointer_button_down_on(),
-                btn_resp.hovered(),
-            );
-            let br = scale_rect(btn_rect, b_scale);
-            let bp = ui.painter().clone();
-            let fill = if btn_resp.hovered() {
-                pal.bg_card_hover
-            } else {
-                pal.bg_card
-            };
-            draw_bento_card(&bp, br, 16.0, fill, pal);
-
-            let dot_col = if app.is_core_alive {
-                egui::Color32::from_rgb(34, 197, 94)
-            } else {
-                pal.red
-            };
-            bp.circle_filled(egui::pos2(br.left() + 13.0, br.center().y), 3.6, dot_col);
-
-            draw_cup_icon(
-                &bp,
-                CupIcon::Refresh,
-                egui::pos2(br.left() + 26.5, br.center().y),
-                pal.primary,
-            );
-            bp.text(
-                egui::pos2(br.left() + 37.5, br.center().y),
-                egui::Align2::LEFT_CENTER,
-                "重启内核",
-                cup_font_med(11.5),
-                pal.text_primary,
-            );
-
-            if btn_resp.clicked() {
-                acts.restart_core = true;
-            }
-            if btn_resp.hovered() {
-                btn_resp.on_hover_text("重启 Mihomo 核心进程并重新加载配置");
-            }
-        });
-    });
-
-    ui.add_space(10.0);
+    ui.add_space(8.0);
 
     // 预留 6px 阴影呼吸内边距，防止 ScrollArea 裁剪掉四周外缘卡片的高斯投影
-    let shadow_pad = 6.0_f32;
     let viewport_avail_h = (ui.available_height() - shadow_pad * 2.0).max(502.0);
 
     egui::ScrollArea::vertical()
@@ -108,11 +112,11 @@ pub fn render_dashboard_tab(
                     let gap = (avail_w * 0.016).clamp(13.0, 20.0).round();
                     ui.spacing_mut().item_spacing = egui::vec2(gap, gap);
 
-                    // 4 行黄金比例纵向分配 (27.5% : 9.2% : 24.7% : 38.6%)，彻底解决大屏下底部表格过大、顶部卡片过扁的问题
+                    // 4 行黄金比例纵向分配 (27.5% : 9.2% : 24.8% : 38.5%)
                     let net_h = (viewport_avail_h - gap * 3.0).max(502.0);
                     let row1_h = (net_h * 0.275).clamp(138.0, 240.0).round();
                     let row2_h = (net_h * 0.092).clamp(46.0, 68.0).round();
-                    let row3_h = (net_h * 0.247).clamp(124.0, 212.0).round();
+                    let row3_h = (net_h * 0.248).clamp(126.0, 214.0).round();
                     let row4_h = (net_h - row1_h - row2_h - row3_h - 2.0).max(194.0).round();
 
                     // 响应式断点：宽度 >= 760px 采用 4 列 Bento 网格；窄窗口 (< 760px) 自动折行切换为 2 列紧凑网格
@@ -121,7 +125,8 @@ pub fn render_dashboard_tab(
                         let span2_w = col_w * 2.0 + gap;
                         let total_grid_w = col_w * 4.0 + gap * 3.0;
                         // 卡片内部字体与控件的等比响应式缩放系数 s (1060x660 基准为 1.0，全屏大窗平滑放大至 1.32)
-                        let s = ((col_w / 202.0) * 0.42 + (net_h / 502.0) * 0.58).clamp(0.95, 1.34);
+                        let s =
+                            ((col_w / 202.0) * 0.42 + (net_h / 502.0) * 0.58).clamp(0.95, 1.32);
 
                         // ROW 1: Status (2x) + Upload (1x) + Download (1x)
                         ui.horizontal(|ui| {
@@ -156,7 +161,9 @@ pub fn render_dashboard_tab(
                         // ROW 2: Outbound Mode (2x) + System Proxy (1x) + TUN (1x)
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = gap;
-                            draw_outbound_mode_card(ui, ctx, app, pal, &mut acts, span2_w, row2_h, s);
+                            draw_outbound_mode_card(
+                                ui, ctx, app, pal, &mut acts, span2_w, row2_h, s,
+                            );
                             if draw_switch_pill_card(
                                 ui,
                                 pal,
@@ -205,7 +212,7 @@ pub fn render_dashboard_tab(
                         let s = 1.0_f32;
                         let r1_h = 138.0_f32;
                         let r2_h = 46.0_f32;
-                        let r3_h = 126.0_f32;
+                        let r3_h = 128.0_f32;
                         let r4_h = 204.0_f32;
 
                         draw_status_card(ui, ctx, app, pal, &mut acts, full_w, r1_h, s);
@@ -298,24 +305,22 @@ fn draw_status_card(
     let (st_rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
     let sp = ui.painter().clone();
     let rnd = (14.0 * s).round();
-    let pad_x = (18.0 * s).round();
+    let pad_x = (16.0 * s).round();
     draw_bento_card(&sp, st_rect, rnd, pal.bg_card, pal);
     draw_status_wave_decor(&sp, st_rect, pal.primary, pal.dark);
 
-    let top_y = st_rect.top() + 21.0 * s;
-    sp.text(
-        egui::pos2(st_rect.left() + pad_x, top_y),
-        egui::Align2::LEFT_CENTER,
-        "状态",
-        cup_font_med(12.0 * s),
+    // 1. 顶部状态栏（按卡片高度比例定位）
+    let top_y = st_rect.top() + height * 0.155;
+    let st_lbl_g = ui.fonts(|f| {
+        f.layout_no_wrap("状态".to_string(), cup_font_med(12.0 * s), pal.text_secondary)
+    });
+    let st_lbl_w = st_lbl_g.size().x;
+    sp.galley(
+        egui::pos2(st_rect.left() + pad_x, top_y - st_lbl_g.size().y * 0.5),
+        st_lbl_g,
         pal.text_secondary,
     );
-    let pill_w = 62.0 * s;
-    let pill_h = 19.0 * s;
-    let run_pill = egui::Rect::from_min_size(
-        egui::pos2(st_rect.left() + pad_x + 30.0 * s, top_y - pill_h * 0.5),
-        egui::vec2(pill_w, pill_h),
-    );
+
     let (pill_bg, pill_fg, pill_txt) = if app.is_core_alive {
         (
             egui::Color32::from_rgb(110, 231, 135),
@@ -329,6 +334,13 @@ fn draw_status_card(
             "• 未启动",
         )
     };
+    let pill_g = ui.fonts(|f| f.layout_no_wrap(pill_txt.to_string(), cup_font_med(10.5 * s), pill_fg));
+    let pill_w = (pill_g.size().x + 16.0 * s).max(58.0 * s);
+    let pill_h = 19.0 * s;
+    let run_pill = egui::Rect::from_min_size(
+        egui::pos2(st_rect.left() + pad_x + st_lbl_w + 8.0 * s, top_y - pill_h * 0.5),
+        egui::vec2(pill_w, pill_h),
+    );
     sp.rect_filled(run_pill, pill_h * 0.5, pill_bg);
     sp.text(
         run_pill.center(),
@@ -338,6 +350,7 @@ fn draw_status_card(
         pill_fg,
     );
 
+    // 2. 中部核心节点区（国旗圆章与右侧两行文字的整体视觉中心对齐）
     let cur_node_raw = if app.current_selected.is_empty() {
         "未选择节点".to_string()
     } else {
@@ -357,9 +370,11 @@ fn draw_status_card(
         }
     };
 
-    let mid_y = st_rect.center().y - 4.0 * s;
-    let av_r = 14.5 * s;
-    let avatar_center = egui::pos2(st_rect.left() + pad_x + av_r - 1.0, mid_y);
+    let mid_cy = st_rect.top() + height * 0.485;
+    let title_cy = mid_cy - 11.5 * s;
+    let tag_cy = mid_cy + 11.5 * s;
+    let av_r = 15.0 * s;
+    let avatar_center = egui::pos2(st_rect.left() + pad_x + av_r, mid_cy);
     sp.circle_filled(avatar_center, av_r, pal.surface_container);
     sp.circle_stroke(
         avatar_center,
@@ -373,27 +388,40 @@ fn draw_status_card(
         draw_cup_icon(&sp, CupIcon::Bolt, avatar_center, pal.primary);
     }
 
-    let content_x = st_rect.left() + pad_x + av_r * 2.0 + 7.0 * s;
-    let cur_title = format_cupertino_title(&cur_node_raw);
+    let content_x = st_rect.left() + pad_x + av_r * 2.0 + 9.0 * s;
+    let max_text_right = st_rect.right() - 88.0 * s;
+    let cur_title = ellipsize_text(
+        ui,
+        &format_cupertino_title(&cur_node_raw),
+        cup_font_med(16.0 * s),
+        (max_text_right - content_x).max(60.0),
+    );
     let leaf_title = format_cupertino_title(&leaf_raw);
     let title_g = ui.fonts(|f| {
         f.layout_no_wrap(cur_title.clone(), cup_font_med(16.0 * s), pal.text_primary)
     });
     let title_w = title_g.size().x;
-    let title_top = mid_y - 19.0 * s;
-    sp.galley(egui::pos2(content_x, title_top), title_g, pal.text_primary);
+    sp.text(
+        egui::pos2(content_x, title_cy),
+        egui::Align2::LEFT_CENTER,
+        &cur_title,
+        cup_font_med(16.0 * s),
+        pal.text_primary,
+    );
     if leaf_title != cur_title && !leaf_title.is_empty() {
-        let sub_x = content_x + 6.0 * s + title_w;
-        let max_sub_x = st_rect.right() - 92.0 * s;
-        if sub_x + 30.0 < max_sub_x {
-            let clipped_sub = sp.with_clip_rect(egui::Rect::from_min_max(
-                egui::pos2(sub_x, title_top),
-                egui::pos2(max_sub_x, title_top + 24.0 * s),
-            ));
-            clipped_sub.text(
-                egui::pos2(sub_x, title_top + 11.0 * s),
+        let sub_x = content_x + title_w + 6.0 * s;
+        let avail_sub_w = max_text_right - sub_x;
+        if avail_sub_w > 28.0 {
+            let sub_txt = ellipsize_text(
+                ui,
+                &format!("· {}", leaf_title),
+                cup_font_reg(11.5 * s),
+                avail_sub_w,
+            );
+            sp.text(
+                egui::pos2(sub_x, title_cy + 0.5 * s),
                 egui::Align2::LEFT_CENTER,
-                format!("· {}", leaf_title),
+                sub_txt,
                 cup_font_reg(11.5 * s),
                 pal.text_secondary,
             );
@@ -406,9 +434,18 @@ fn draw_status_card(
         "↻ 测试节点"
     };
     let tag_h = 20.0 * s;
-    let tag1_w = 64.0 * s;
-    let tag_y = mid_y + 6.0 * s;
-    let tag1_rect = egui::Rect::from_min_size(egui::pos2(content_x, tag_y), egui::vec2(tag1_w, tag_h));
+    let tag1_g = ui.fonts(|f| {
+        f.layout_no_wrap(
+            test_lbl.to_string(),
+            cup_font_med(10.0 * s),
+            pal.text_secondary,
+        )
+    });
+    let tag1_w = (tag1_g.size().x + 14.0 * s).max(64.0 * s);
+    let tag1_rect = egui::Rect::from_min_size(
+        egui::pos2(content_x, tag_cy - tag_h * 0.5),
+        egui::vec2(tag1_w, tag_h),
+    );
     let tag1_resp = ui.interact(
         tag1_rect,
         ui.id().with("dash_test_node_btn"),
@@ -504,7 +541,7 @@ fn draw_status_card(
     let q_g = ui.fonts(|f| f.layout_no_wrap(q_txt.clone(), cup_font_med(10.0 * s), q_fg));
     let tag2_w = (q_g.size().x + 16.0 * s).max(64.0 * s);
     let tag2_rect = egui::Rect::from_min_size(
-        egui::pos2(tag1_rect.right() + 6.0 * s, tag_y),
+        egui::pos2(tag1_rect.right() + 6.0 * s, tag_cy - tag_h * 0.5),
         egui::vec2(tag2_w, tag_h),
     );
     let tag2_resp = ui.interact(
@@ -537,8 +574,9 @@ fn draw_status_card(
         tag2_resp.on_hover_text("点击重新检测节点响应延迟");
     }
 
-    let bot_lbl_y = st_rect.bottom() - 32.0 * s;
-    let bot_val_y = st_rect.bottom() - 15.5 * s;
+    // 3. 底部信息栏（运行时长 + 当前订阅）
+    let bot_lbl_y = st_rect.bottom() - height * 0.23;
+    let bot_val_y = st_rect.bottom() - height * 0.11;
     sp.text(
         egui::pos2(st_rect.left() + pad_x, bot_lbl_y),
         egui::Align2::LEFT_CENTER,
@@ -561,7 +599,7 @@ fn draw_status_card(
         .find(|s| s.id == app.profiles.active)
         .map(|s| s.name.clone())
         .unwrap_or_else(|| "默认配置".to_string());
-    let sub_col_x = st_rect.left() + pad_x + 84.0 * s;
+    let sub_col_x = st_rect.left() + pad_x + (width * 0.22).clamp(84.0 * s, 118.0 * s);
     sp.text(
         egui::pos2(sub_col_x, bot_lbl_y),
         egui::Align2::LEFT_CENTER,
@@ -577,8 +615,9 @@ fn draw_status_card(
         pal.text_primary,
     );
 
+    // 4. 右侧花朵光晕启停主按钮
     let flower_r = 22.5 * s;
-    let flower_center = egui::pos2(st_rect.right() - 44.0 * s, st_rect.center().y + 4.0 * s);
+    let flower_center = egui::pos2(st_rect.right() - 42.0 * s, st_rect.center().y + 4.0 * s);
     let flower_hit = egui::Rect::from_center_size(flower_center, egui::vec2(54.0 * s, 54.0 * s));
     let flower_resp = ui.interact(
         flower_hit,
@@ -636,45 +675,61 @@ fn draw_traffic_card(
     let p = ui.painter().clone();
     let pad = (14.0 * s).round();
     draw_bento_card(&p, rect, (14.0 * s).round(), pal.bg_card, pal);
+
+    let hdr_y = rect.top() + height * 0.155;
     p.text(
-        egui::pos2(rect.left() + pad, rect.top() + 20.0 * s),
+        egui::pos2(rect.left() + pad, hdr_y),
         egui::Align2::LEFT_CENTER,
         label,
         cup_font_med(11.5 * s),
         pal.text_secondary,
     );
     p.text(
-        egui::pos2(rect.right() - pad + 2.0, rect.top() + 20.0 * s),
+        egui::pos2(rect.right() - pad, hdr_y),
         egui::Align2::RIGHT_CENTER,
         format!("峰值 {}", format_speed(peak)),
         cup_font_reg(9.8 * s),
         pal.text_muted,
     );
+
+    // 主速率数字与单位严格基线对齐
     let (num, unit) = split_speed_parts(rate);
     let num_g = ui.fonts(|f| f.layout_no_wrap(num, cup_font_med(21.0 * s), pal.text_primary));
+    let unit_g = ui.fonts(|f| {
+        f.layout_no_wrap(
+            unit.to_string(),
+            cup_font_med(11.0 * s),
+            pal.text_secondary,
+        )
+    });
     let num_w = num_g.size().x;
+    let num_h = num_g.size().y;
+    let unit_h = unit_g.size().y;
+    let num_top = rect.top() + height * 0.25;
     p.galley(
-        egui::pos2(rect.left() + pad, rect.top() + 34.0 * s),
+        egui::pos2(rect.left() + pad, num_top),
         num_g,
         pal.text_primary,
     );
-    p.text(
-        egui::pos2(rect.left() + pad + 3.0 * s + num_w, rect.top() + 50.0 * s),
-        egui::Align2::LEFT_CENTER,
-        unit,
-        cup_font_med(11.0 * s),
+    p.galley(
+        egui::pos2(
+            rect.left() + pad + 4.0 * s + num_w,
+            num_top + num_h - unit_h - 2.5 * s,
+        ),
+        unit_g,
         pal.text_secondary,
     );
+
     p.text(
-        egui::pos2(rect.left() + pad, rect.top() + 68.0 * s),
+        egui::pos2(rect.left() + pad, rect.top() + height * 0.50),
         egui::Align2::LEFT_CENTER,
         format!("总计 {}", format_bytes(total)),
         cup_font_reg(10.0 * s),
         pal.text_muted,
     );
     let spark = egui::Rect::from_min_max(
-        egui::pos2(rect.left() + 8.0 * s, rect.top() + 82.0 * s),
-        egui::pos2(rect.right() - 8.0 * s, rect.bottom() - 8.0 * s),
+        egui::pos2(rect.left() + 8.0 * s, rect.top() + height * 0.59),
+        egui::pos2(rect.right() - 8.0 * s, rect.bottom() - 7.0 * s),
     );
     draw_sparkline_area(&p, spark, history, pal.primary);
 }
@@ -692,15 +747,16 @@ fn draw_outbound_mode_card(
 ) {
     let (om_rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
     let op = ui.painter().clone();
+    let pad = (14.0 * s).round();
     draw_bento_card(&op, om_rect, (12.0 * s).round(), pal.bg_card, pal);
     draw_cup_icon(
         &op,
         CupIcon::Network,
-        egui::pos2(om_rect.left() + 20.0 * s, om_rect.center().y),
+        egui::pos2(om_rect.left() + pad + 5.0 * s, om_rect.center().y),
         pal.text_secondary,
     );
     op.text(
-        egui::pos2(om_rect.left() + 34.0 * s, om_rect.center().y),
+        egui::pos2(om_rect.left() + pad + 19.0 * s, om_rect.center().y),
         egui::Align2::LEFT_CENTER,
         "出站模式",
         cup_font_med(12.5 * s),
@@ -713,10 +769,10 @@ fn draw_outbound_mode_card(
         ("direct", "直连", CupIcon::Locate),
     ];
     let cur_mode = app.profiles.mode.clone();
-    let pill_w = (66.0 * s).round();
-    let pill_h = (height - 16.0).clamp(30.0, 42.0);
+    let pill_w = (68.0 * s).round();
+    let pill_h = (height - 14.0 * s).clamp(28.0, 42.0);
     let pill_gap = (6.0 * s).round();
-    let right_start = om_rect.right() - 10.0 * s - (pill_w * 3.0 + pill_gap * 2.0);
+    let right_start = om_rect.right() - 8.0 * s - (pill_w * 3.0 + pill_gap * 2.0);
     for (i, (m_key, m_lbl, m_ic)) in modes.iter().enumerate() {
         let p_rect = egui::Rect::from_min_size(
             egui::pos2(
@@ -759,12 +815,20 @@ fn draw_outbound_mode_card(
         } else {
             pal.text_secondary
         };
-        draw_cup_icon(&op, *m_ic, egui::pos2(pr.left() + 15.0 * s, pr.center().y), fg);
-        op.text(
-            egui::pos2(pr.left() + 27.0 * s, pr.center().y),
-            egui::Align2::LEFT_CENTER,
-            *m_lbl,
-            cup_font_med(11.5 * s),
+        // 将 [图标 + 间距 + 文字] 作为整体在胶囊按钮内部水平居中，消除视觉偏左
+        let lbl_g = ui.fonts(|f| f.layout_no_wrap(m_lbl.to_string(), cup_font_med(11.5 * s), fg));
+        let icon_span = 14.0 * s;
+        let total_w = icon_span + lbl_g.size().x;
+        let start_x = pr.center().x - total_w * 0.5;
+        draw_cup_icon(
+            &op,
+            *m_ic,
+            egui::pos2(start_x + 4.5 * s, pr.center().y),
+            fg,
+        );
+        op.galley(
+            egui::pos2(start_x + icon_span, pr.center().y - lbl_g.size().y * 0.5),
+            lbl_g,
             fg,
         );
         if p_resp.clicked() && !is_m {
@@ -784,17 +848,20 @@ fn draw_switch_pill_card(
 ) -> bool {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
     let p = ui.painter().clone();
+    let pad = (14.0 * s).round();
     draw_bento_card(&p, rect, (12.0 * s).round(), pal.bg_card, pal);
     p.text(
-        egui::pos2(rect.left() + 16.0 * s, rect.center().y),
+        egui::pos2(rect.left() + pad, rect.center().y),
         egui::Align2::LEFT_CENTER,
         label,
         cup_font_med(12.5 * s),
         pal.text_primary,
     );
+    let sw_w = 42.0 * s.min(1.15);
+    let sw_h = 23.0 * s.min(1.15);
     let sw_r = egui::Rect::from_center_size(
-        egui::pos2(rect.right() - 32.0 * s, rect.center().y),
-        egui::vec2(42.0 * s.min(1.15), 23.0 * s.min(1.15)),
+        egui::pos2(rect.right() - pad - sw_w * 0.5, rect.center().y),
+        egui::vec2(sw_w, sw_h),
     );
     let mut sw_ui = ui.new_child(egui::UiBuilder::new().max_rect(sw_r));
     md3_switch(&mut sw_ui, val, pal)
@@ -813,7 +880,7 @@ fn draw_intranet_ip_card(
     let ipp = ui.painter().clone();
     let pad = (14.0 * s).round();
     draw_bento_card(&ipp, ip_rect, (14.0 * s).round(), pal.bg_card, pal);
-    let hdr_y = ip_rect.top() + 20.0 * s;
+    let hdr_y = ip_rect.top() + height * 0.16;
     ipp.text(
         egui::pos2(ip_rect.left() + pad, hdr_y),
         egui::Align2::LEFT_CENTER,
@@ -821,7 +888,7 @@ fn draw_intranet_ip_card(
         cup_font_med(11.5 * s),
         pal.text_secondary,
     );
-    let lan_h = (36.0 * s).round();
+    let lan_h = (height * 0.30).clamp(35.0 * s, 46.0 * s).round();
     let lan_box = egui::Rect::from_min_max(
         egui::pos2(ip_rect.left() + 10.0 * s, ip_rect.bottom() - 10.0 * s - lan_h),
         egui::pos2(ip_rect.right() - 10.0 * s, ip_rect.bottom() - 10.0 * s),
@@ -841,7 +908,7 @@ fn draw_intranet_ip_card(
     draw_cup_icon(
         &ipp,
         CupIcon::EyeOff,
-        egui::pos2(ip_rect.right() - 20.0 * s, hdr_y),
+        egui::pos2(ip_rect.right() - pad - 5.0 * s, hdr_y),
         if app.hide_ip || mask_resp.hovered() {
             pal.primary
         } else {
@@ -858,7 +925,7 @@ fn draw_intranet_ip_card(
     } else {
         app.intranet_ip.clone()
     };
-    let ip_y = (hdr_y + 10.0 * s + lan_box.top()) * 0.5;
+    let ip_y = (hdr_y + 7.0 * s + lan_box.top()) * 0.5;
     ipp.text(
         egui::pos2(ip_rect.left() + pad, ip_y),
         egui::Align2::LEFT_CENTER,
@@ -872,7 +939,7 @@ fn draw_intranet_ip_card(
 
     ipp.rect_filled(lan_box, 9.0 * s, pal.surface_container);
     ipp.text(
-        egui::pos2(lan_box.left() + 10.0 * s, lan_box.top() + lan_h * 0.33),
+        egui::pos2(lan_box.left() + 10.0 * s, lan_box.top() + lan_h * 0.34),
         egui::Align2::LEFT_CENTER,
         "局域网共享",
         cup_font_med(11.0 * s),
@@ -889,9 +956,11 @@ fn draw_intranet_ip_card(
         cup_font_reg(9.5 * s),
         pal.text_muted,
     );
+    let sw_w = 42.0 * s.min(1.15);
+    let sw_h = 23.0 * s.min(1.15);
     let sw_lan_r = egui::Rect::from_center_size(
-        egui::pos2(lan_box.right() - 28.0 * s, lan_box.center().y),
-        egui::vec2(42.0 * s.min(1.15), 23.0 * s.min(1.15)),
+        egui::pos2(lan_box.right() - 10.0 * s - sw_w * 0.5, lan_box.center().y),
+        egui::vec2(sw_w, sw_h),
     );
     let mut sw_lan_ui = ui.new_child(egui::UiBuilder::new().max_rect(sw_lan_r));
     if md3_switch(&mut sw_lan_ui, app.profiles.allow_lan, pal) {
@@ -908,14 +977,15 @@ fn draw_profile_card(
     height: f32,
     s: f32,
 ) {
-    let (pr_rect, pr_resp) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
+    let (pr_rect, pr_resp) =
+        ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
     if pr_resp.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     let prp = ui.painter().clone();
     let pad = (14.0 * s).round();
     draw_bento_card(&prp, pr_rect, (14.0 * s).round(), pal.bg_card, pal);
-    let hdr_y = pr_rect.top() + 20.0 * s;
+    let hdr_y = pr_rect.top() + height * 0.16;
     prp.text(
         egui::pos2(pr_rect.left() + pad, hdr_y),
         egui::Align2::LEFT_CENTER,
@@ -924,7 +994,7 @@ fn draw_profile_card(
         pal.text_secondary,
     );
     let ref_hit = egui::Rect::from_center_size(
-        egui::pos2(pr_rect.right() - 28.0 * s, hdr_y),
+        egui::pos2(pr_rect.right() - pad - 16.0 * s, hdr_y),
         egui::vec2(20.0 * s, 20.0 * s),
     );
     let ref_resp = ui.interact(
@@ -946,7 +1016,7 @@ fn draw_profile_card(
         },
     );
     prp.text(
-        egui::pos2(pr_rect.right() - 12.0 * s, hdr_y),
+        egui::pos2(pr_rect.right() - pad, hdr_y),
         egui::Align2::RIGHT_CENTER,
         "›",
         cup_font_med(14.0 * s),
@@ -960,12 +1030,12 @@ fn draw_profile_card(
         .find(|s| s.id == app.profiles.active)
         .cloned();
     if let Some(sub) = active_sub {
-        let wave_r = egui::Rect::from_min_max(
-            egui::pos2(pr_rect.left() + pad, pr_rect.bottom() - 22.0 * s),
-            egui::pos2(pr_rect.right() - pad, pr_rect.bottom() - 12.0 * s),
+        let y_name = pr_rect.top() + height * 0.42;
+        let y_quota = pr_rect.top() + height * 0.66;
+        let wave_r = egui::Rect::from_center_size(
+            egui::pos2(pr_rect.center().x, pr_rect.top() + height * 0.85),
+            egui::vec2(pr_rect.width() - pad * 2.0, 5.5 * s),
         );
-        let y_name = hdr_y + (wave_r.top() - hdr_y) * 0.36;
-        let y_quota = hdr_y + (wave_r.top() - hdr_y) * 0.76;
 
         prp.text(
             egui::pos2(pr_rect.left() + pad, y_name),
@@ -1036,14 +1106,15 @@ fn draw_service_status_card(
     height: f32,
     s: f32,
 ) {
-    let (sv_rect, sv_resp) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
+    let (sv_rect, sv_resp) =
+        ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
     if sv_resp.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     let svp = ui.painter().clone();
     let pad = (14.0 * s).round();
     draw_bento_card(&svp, sv_rect, (14.0 * s).round(), pal.bg_card, pal);
-    let hdr_y = sv_rect.top() + 20.0 * s;
+    let hdr_y = sv_rect.top() + height * 0.16;
     svp.text(
         egui::pos2(sv_rect.left() + pad, hdr_y),
         egui::Align2::LEFT_CENTER,
@@ -1052,7 +1123,7 @@ fn draw_service_status_card(
         pal.text_secondary,
     );
     svp.text(
-        egui::pos2(sv_rect.right() - 12.0 * s, hdr_y),
+        egui::pos2(sv_rect.right() - pad, hdr_y),
         egui::Align2::RIGHT_CENTER,
         if app.is_probing_status {
             "测速中…"
@@ -1088,10 +1159,11 @@ fn draw_service_status_card(
         (fallback_d as f32 * 0.65).max(18.0) as i32
     };
 
-    let list_top = sv_rect.top() + 36.0 * s;
+    // 与左侧「内网 IP」卡片的底部内框下边缘保持同高对齐 (bottom - 10*s)
+    let list_top = sv_rect.top() + height * 0.295;
     let list_bot = sv_rect.bottom() - 10.0 * s;
-    let pill_gap = 7.0 * s;
-    let srv_pill_h = ((list_bot - list_top - pill_gap) * 0.5).clamp(30.0, 48.0);
+    let pill_gap = (6.5 * s).round();
+    let srv_pill_h = ((list_bot - list_top - pill_gap) * 0.5).max(26.0);
     for (idx, (badge_ch, srv_name, delay_val)) in
         [("G", "Google", g_delay), ("⚡", "Cloudflare", cf_delay)]
             .iter()
@@ -1176,11 +1248,19 @@ fn draw_memory_info_card(
     height: f32,
     s: f32,
 ) {
-    let (mm_rect, mm_resp) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+    let (mm_rect, mm_resp) =
+        ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
     let mmp = ui.painter().clone();
     let pad = (14.0 * s).round();
     draw_bento_card(&mmp, mm_rect, (14.0 * s).round(), pal.bg_card, pal);
-    let hdr_y = mm_rect.top() + 20.0 * s;
+
+    // 5 行严格按卡片内部相对比例分层 (16% / 38% / 57% / 74% / 88%)，彻底消除进度条与文字重叠
+    let hdr_y = mm_rect.top() + height * 0.16;
+    let val_cy = mm_rect.top() + height * 0.38;
+    let bar_cy = mm_rect.top() + height * 0.575;
+    let leg1_y = mm_rect.top() + height * 0.735;
+    let leg2_y = mm_rect.top() + height * 0.88;
+
     mmp.text(
         egui::pos2(mm_rect.left() + pad, hdr_y),
         egui::Align2::LEFT_CENTER,
@@ -1189,9 +1269,11 @@ fn draw_memory_info_card(
         pal.text_secondary,
     );
 
-    let trim_rect = egui::Rect::from_center_size(
-        egui::pos2(mm_rect.right() - 32.0 * s, hdr_y),
-        egui::vec2(44.0 * s, 20.0 * s),
+    let trim_w = 46.0 * s;
+    let trim_h = 20.0 * s;
+    let trim_rect = egui::Rect::from_min_size(
+        egui::pos2(mm_rect.right() - pad - trim_w, hdr_y - trim_h * 0.5),
+        egui::vec2(trim_w, trim_h),
     );
     let trim_resp = ui.interact(
         trim_rect,
@@ -1210,7 +1292,7 @@ fn draw_memory_info_card(
     let tr_draw = scale_rect(trim_rect, trim_sc);
     mmp.rect_filled(
         tr_draw,
-        10.0 * s,
+        trim_h * 0.5,
         if trim_resp.hovered() {
             pal.bg_selected
         } else {
@@ -1238,11 +1320,7 @@ fn draw_memory_info_card(
     let core_rss_mb = app.mem_core_rss_kb as f64 / 1024.0;
     let tot_mb = (gui_mb + core_mb).max(1.0);
 
-    let leg2_y = mm_rect.bottom() - 15.0 * s;
-    let leg1_y = mm_rect.bottom() - 32.0 * s;
-    let bar_y = (hdr_y + leg1_y) * 0.56;
-    let val_top = hdr_y + (bar_y - hdr_y) * 0.22;
-
+    // 主数值与 MB 单位严格基线对齐
     let mem_g = ui.fonts(|f| {
         f.layout_no_wrap(
             format!("{:.1}", tot_mb),
@@ -1250,53 +1328,73 @@ fn draw_memory_info_card(
             pal.text_primary,
         )
     });
+    let mb_g = ui.fonts(|f| {
+        f.layout_no_wrap(
+            "MB".to_string(),
+            cup_font_med(10.5 * s),
+            pal.text_secondary,
+        )
+    });
     let mem_w = mem_g.size().x;
     let mem_h = mem_g.size().y;
+    let mb_h = mb_g.size().y;
+    let mem_top = val_cy - mem_h * 0.5;
+    let baseline_y = mem_top + mem_h - mb_h * 0.5 - 2.0 * s;
+
     mmp.galley(
-        egui::pos2(mm_rect.left() + pad, val_top),
+        egui::pos2(mm_rect.left() + pad, mem_top),
         mem_g,
         pal.text_primary,
     );
-    mmp.text(
-        egui::pos2(mm_rect.left() + pad + 3.0 * s + mem_w, val_top + mem_h * 0.62),
-        egui::Align2::LEFT_CENTER,
-        "MB",
-        cup_font_med(10.5 * s),
+    mmp.galley(
+        egui::pos2(
+            mm_rect.left() + pad + 3.5 * s + mem_w,
+            mem_top + mem_h - mb_h - 2.0 * s,
+        ),
+        mb_g,
         pal.text_secondary,
     );
     if app.mem_sys_total_gb > 0.1 {
         let sys_pct = (app.mem_sys_used_gb / app.mem_sys_total_gb * 100.0).clamp(0.0, 100.0);
         mmp.text(
-            egui::pos2(mm_rect.right() - pad, val_top + mem_h * 0.62),
+            egui::pos2(mm_rect.right() - pad, baseline_y),
             egui::Align2::RIGHT_CENTER,
             format!("系统 {:.0}%", sys_pct),
-            cup_font_reg(9.5 * s),
+            cup_font_reg(9.8 * s),
             pal.text_muted,
         );
     }
 
-    let mbar = egui::Rect::from_min_size(
-        egui::pos2(mm_rect.left() + pad, bar_y),
-        egui::vec2(mm_rect.width() - pad * 2.0, 5.5 * s),
+    // 进度条严格居中在 bar_cy，上下均留足 16% 净空
+    let bar_h = 5.5 * s;
+    let mbar = egui::Rect::from_center_size(
+        egui::pos2(mm_rect.center().x, bar_cy),
+        egui::vec2(mm_rect.width() - pad * 2.0, bar_h),
     );
-    mmp.rect_filled(mbar, 2.8 * s, egui::Color32::from_rgb(191, 219, 254));
+    let core_track_col = if pal.dark {
+        egui::Color32::from_rgba_unmultiplied(147, 197, 253, 85)
+    } else {
+        egui::Color32::from_rgb(191, 219, 254)
+    };
+    mmp.rect_filled(mbar, bar_h * 0.5, core_track_col);
     let app_ratio = (gui_mb / tot_mb).clamp(0.12, 0.88) as f32;
     let app_bar = egui::Rect::from_min_size(
         mbar.min,
         egui::vec2(mbar.width() * app_ratio, mbar.height()),
     );
-    mmp.rect_filled(app_bar, 2.8 * s, pal.primary);
+    mmp.rect_filled(app_bar, bar_h * 0.5, pal.primary);
 
+    // 图例第 1 行：界面
     mmp.circle_filled(
         egui::pos2(mm_rect.left() + pad + 3.0 * s, leg1_y),
         2.8 * s,
         pal.primary,
     );
     mmp.text(
-        egui::pos2(mm_rect.left() + pad + 11.0 * s, leg1_y),
+        egui::pos2(mm_rect.left() + pad + 10.5 * s, leg1_y),
         egui::Align2::LEFT_CENTER,
         format!("界面  {:.1} MB", gui_mb),
-        cup_font_med(10.5 * s),
+        cup_font_med(10.2 * s),
         pal.text_secondary,
     );
     if gui_rss_mb > gui_mb + 1.0 {
@@ -1309,16 +1407,17 @@ fn draw_memory_info_card(
         );
     }
 
+    // 图例第 2 行：内核
     mmp.circle_filled(
         egui::pos2(mm_rect.left() + pad + 3.0 * s, leg2_y),
         2.8 * s,
         egui::Color32::from_rgb(147, 197, 253),
     );
     mmp.text(
-        egui::pos2(mm_rect.left() + pad + 11.0 * s, leg2_y),
+        egui::pos2(mm_rect.left() + pad + 10.5 * s, leg2_y),
         egui::Align2::LEFT_CENTER,
         format!("内核  {:.1} MB", core_mb),
-        cup_font_med(10.5 * s),
+        cup_font_med(10.2 * s),
         pal.text_secondary,
     );
     if app.mem_sys_total_gb > 0.1 {
@@ -1367,6 +1466,7 @@ fn draw_live_connections_card(
 ) {
     let (lc_rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
     let lcp = ui.painter().clone();
+    let pad = (14.0 * s).round();
     draw_bento_card(&lcp, lc_rect, (14.0 * s).round(), pal.bg_card, pal);
 
     let conn_cnt = app.active_connections.max(app.live_connections.len());
@@ -1375,11 +1475,11 @@ fn draw_live_connections_card(
         "近期请求".to_string(),
         "DNS 查询".to_string(),
     ];
-    let mut tab_x = lc_rect.left() + 12.0 * s;
+    let mut tab_x = lc_rect.left() + pad;
     let tab_h = 24.0 * s;
     for (t_idx, t_lbl) in tab_labels.iter().enumerate() {
         let tg = ui.fonts(|f| {
-            f.layout_no_wrap(t_lbl.clone(), cup_font_med(11.0 * s), pal.text_primary)
+            f.layout_no_wrap(t_lbl.clone(), cup_font_med(10.8 * s), pal.text_primary)
         });
         let tw = tg.size().x + 20.0 * s;
         let tr = egui::Rect::from_min_size(
@@ -1425,19 +1525,27 @@ fn draw_live_connections_card(
         tab_x += tw + 6.0 * s;
     }
 
-    let hdr_y = lc_rect.top() + 48.0 * s;
-    let c_src = lc_rect.left() + 16.0 * s;
-    let c_dst = lc_rect.left() + width * 0.23;
-    let c_ext = lc_rect.left() + width * 0.58;
-    let c_dl = lc_rect.right() - 78.0 * s;
-    let c_ul = lc_rect.right() - 16.0 * s;
+    // 5 列黄金比例坐标：拉宽「出口节点」与「下载」之间的安全间距，彻底杜绝 Singapore 04 与 102.7 KB 粘连
+    let hdr_y = lc_rect.top() + 47.0 * s;
+    let c_src = lc_rect.left() + pad;
+    let c_dst = lc_rect.left() + (width * 0.185).max(84.0 * s);
+    let c_ext = lc_rect.left() + width * 0.51;
+    let c_ul = lc_rect.right() - pad;
+    let dl_col_reserve = (width * 0.135).clamp(58.0 * s, 82.0 * s);
+    let c_dl = c_ul - dl_col_reserve;
+
+    let col_headers = match app.dash_conn_tab {
+        1 => ["类型", "近期目标主机", "命中策略", "下行", "上行"],
+        2 => ["协议", "查询域名 (Host)", "解析出口", "响应", "上行"],
+        _ => ["来源", "目标地址", "出口节点", "下载", "上传"],
+    };
 
     for (x, align, lbl) in [
-        (c_src, egui::Align2::LEFT_CENTER, "来源"),
-        (c_dst, egui::Align2::LEFT_CENTER, "目标地址"),
-        (c_ext, egui::Align2::LEFT_CENTER, "出口节点"),
-        (c_dl, egui::Align2::RIGHT_CENTER, "下载"),
-        (c_ul, egui::Align2::RIGHT_CENTER, "上传"),
+        (c_src, egui::Align2::LEFT_CENTER, col_headers[0]),
+        (c_dst, egui::Align2::LEFT_CENTER, col_headers[1]),
+        (c_ext, egui::Align2::LEFT_CENTER, col_headers[2]),
+        (c_dl, egui::Align2::RIGHT_CENTER, col_headers[3]),
+        (c_ul, egui::Align2::RIGHT_CENTER, col_headers[4]),
     ] {
         lcp.text(
             egui::pos2(x, hdr_y),
@@ -1450,8 +1558,8 @@ fn draw_live_connections_card(
     let sep_y = hdr_y + 11.0 * s;
     lcp.line_segment(
         [
-            egui::pos2(lc_rect.left() + 14.0 * s, sep_y),
-            egui::pos2(lc_rect.right() - 14.0 * s, sep_y),
+            egui::pos2(lc_rect.left() + pad, sep_y),
+            egui::pos2(lc_rect.right() - pad, sep_y),
         ],
         egui::Stroke::new(0.8_f32, pal.divider),
     );
@@ -1468,19 +1576,34 @@ fn draw_live_connections_card(
         let avail_list_h = (lc_rect.bottom() - 10.0 * s - sep_y).max(90.0);
         let target_row_h = 30.0 * s;
         let max_rows = (avail_list_h / target_row_h).floor().max(4.0) as usize;
-        let actual_rows = app.live_connections.len().min(max_rows);
+        let mut display_rows = app.live_connections.clone();
+        if app.dash_conn_tab == 1 {
+            display_rows.sort_by(|a, b| {
+                (b.download + b.upload).cmp(&(a.download + a.upload))
+            });
+        } else if app.dash_conn_tab == 2 {
+            display_rows.retain(|c| c.target.chars().any(|ch| ch.is_ascii_alphabetic()));
+            if display_rows.is_empty() {
+                display_rows = app.live_connections.clone();
+            }
+        }
+        let actual_rows = display_rows.len().min(max_rows);
         let row_step = if actual_rows > 0 {
-            (avail_list_h / actual_rows as f32).clamp(28.0 * s, 38.0 * s)
+            (avail_list_h / actual_rows as f32).clamp(28.0 * s, 36.0 * s)
         } else {
             target_row_h
         };
-        for (r_i, conn) in app.live_connections.iter().take(max_rows).enumerate() {
+        for (r_i, conn) in display_rows.iter().take(max_rows).enumerate() {
             let ry = sep_y + row_step * 0.52 + r_i as f32 * row_step;
             if ry + 10.0 > lc_rect.bottom() {
                 break;
             }
-            let init_ch = conn
-                .source
+            let src_label = if app.dash_conn_tab == 2 {
+                "DNS"
+            } else {
+                conn.source.as_str()
+            };
+            let init_ch = src_label
                 .chars()
                 .next()
                 .unwrap_or('A')
@@ -1494,23 +1617,32 @@ fn draw_live_connections_card(
                 cup_font_med(9.0 * s),
                 pal.text_secondary,
             );
+            let src_txt = ellipsize_text(
+                ui,
+                src_label,
+                cup_font_med(10.8 * s),
+                (c_dst - (c_src + 20.0 * s) - 8.0 * s).max(24.0),
+            );
             lcp.text(
                 egui::pos2(c_src + 20.0 * s, ry),
                 egui::Align2::LEFT_CENTER,
-                &conn.source,
-                cup_font_med(11.0 * s),
+                src_txt,
+                cup_font_med(10.8 * s),
                 pal.text_primary,
             );
 
-            let clipped_dst = lcp.with_clip_rect(egui::Rect::from_min_max(
-                egui::pos2(c_dst, ry - 10.0 * s),
-                egui::pos2((c_ext - 16.0 * s).max(c_dst + 20.0), ry + 10.0 * s),
-            ));
-            clipped_dst.text(
+            let raw_target = if app.dash_conn_tab == 2 {
+                conn.target.split(':').next().unwrap_or(&conn.target)
+            } else {
+                conn.target.as_str()
+            };
+            let dst_max_w = (c_ext - c_dst - 12.0 * s).max(40.0);
+            let dst_txt = ellipsize_text(ui, raw_target, cup_font_reg(10.8 * s), dst_max_w);
+            lcp.text(
                 egui::pos2(c_dst, ry),
                 egui::Align2::LEFT_CENTER,
-                &conn.target,
-                cup_font_reg(11.0 * s),
+                dst_txt,
+                cup_font_reg(10.8 * s),
                 pal.text_secondary,
             );
 
@@ -1524,30 +1656,40 @@ fn draw_live_connections_card(
                 draw_flag_icon(&lcp, f_rect, ext_flag, pal);
                 ext_text_x += 16.5 * s;
             }
-            let clipped_ext = lcp.with_clip_rect(egui::Rect::from_min_max(
-                egui::pos2(ext_text_x, ry - 10.0 * s),
-                egui::pos2((c_dl - 46.0 * s).max(ext_text_x + 20.0), ry + 10.0 * s),
-            ));
-            clipped_ext.text(
+            // 为右侧右对齐的「下载」数值预留 58*s 宽度 + 12*s 净空，彻底避免出口节点与下载流量相撞
+            let dl_text = format_bytes(conn.download);
+            let dl_w = ui.fonts(|f| {
+                f.layout_no_wrap(dl_text.clone(), cup_font_reg(10.6 * s), pal.text_secondary)
+                    .size()
+                    .x
+            });
+            let ext_max_w = (c_dl - dl_w - 14.0 * s - ext_text_x).max(28.0);
+            let ext_txt = ellipsize_text(
+                ui,
+                &format_cupertino_title(&conn.exit),
+                cup_font_reg(10.6 * s),
+                ext_max_w,
+            );
+            lcp.text(
                 egui::pos2(ext_text_x, ry),
                 egui::Align2::LEFT_CENTER,
-                format_cupertino_title(&conn.exit),
-                cup_font_reg(10.8 * s),
+                ext_txt,
+                cup_font_reg(10.6 * s),
                 pal.text_secondary,
             );
 
             lcp.text(
                 egui::pos2(c_dl, ry),
                 egui::Align2::RIGHT_CENTER,
-                format_bytes(conn.download),
-                cup_font_reg(10.8 * s),
+                dl_text,
+                cup_font_reg(10.6 * s),
                 pal.text_secondary,
             );
             lcp.text(
                 egui::pos2(c_ul, ry),
                 egui::Align2::RIGHT_CENTER,
                 format_bytes(conn.upload),
-                cup_font_reg(10.8 * s),
+                cup_font_reg(10.6 * s),
                 pal.text_secondary,
             );
         }
@@ -1562,7 +1704,8 @@ fn draw_proxy_groups_card(
     height: f32,
     s: f32,
 ) {
-    let (pg_rect, pg_resp) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
+    let (pg_rect, pg_resp) =
+        ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
     if pg_resp.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
@@ -1570,15 +1713,17 @@ fn draw_proxy_groups_card(
     let pad = (14.0 * s).round();
     draw_bento_card(&pgp, pg_rect, (14.0 * s).round(), pal.bg_card, pal);
     let hdr_y = pg_rect.top() + 20.0 * s;
-    pgp.text(
-        egui::pos2(pg_rect.left() + pad, hdr_y),
-        egui::Align2::LEFT_CENTER,
-        "策略组",
-        cup_font_med(11.5 * s),
+    let hdr_g = ui.fonts(|f| {
+        f.layout_no_wrap("策略组".to_string(), cup_font_med(11.5 * s), pal.text_secondary)
+    });
+    let hdr_w = hdr_g.size().x;
+    pgp.galley(
+        egui::pos2(pg_rect.left() + pad, hdr_y - hdr_g.size().y * 0.5),
+        hdr_g,
         pal.text_secondary,
     );
     let cnt_pill = egui::Rect::from_center_size(
-        egui::pos2(pg_rect.left() + pad + 48.0 * s, hdr_y),
+        egui::pos2(pg_rect.left() + pad + hdr_w + 15.0 * s, hdr_y),
         egui::vec2(19.0 * s, 15.5 * s),
     );
     pgp.rect_filled(cnt_pill, 7.5 * s, pal.surface_container);
@@ -1590,7 +1735,7 @@ fn draw_proxy_groups_card(
         pal.text_secondary,
     );
     pgp.text(
-        egui::pos2(pg_rect.right() - 12.0 * s, hdr_y),
+        egui::pos2(pg_rect.right() - pad, hdr_y),
         egui::Align2::RIGHT_CENTER,
         "›",
         cup_font_med(14.0 * s),
@@ -1606,17 +1751,17 @@ fn draw_proxy_groups_card(
         app.group_summaries.clone()
     };
 
-    let list_top = pg_rect.top() + 38.0 * s;
+    let list_top = pg_rect.top() + 36.0 * s;
     let list_bot = pg_rect.bottom() - 10.0 * s;
     let avail_h = (list_bot - list_top).max(100.0);
-    let item_gap = 6.5 * s;
-    let max_fit = ((avail_h + item_gap) / (41.0 * s + item_gap))
+    let item_gap = 6.0 * s;
+    let max_fit = ((avail_h + item_gap) / (36.0 * s + item_gap))
         .floor()
         .max(3.0) as usize;
     let vis_cnt = summaries.len().min(max_fit).max(1);
-    // 自适应均分卡片垂直空间，消除策略组卡片底部的空白断层
+    // 自适应均分卡片垂直空间，使最后一个策略组项下边缘刚好对齐 list_bot (bottom - 10*s)
     let box_h = ((avail_h - item_gap * (vis_cnt as f32 - 1.0)) / vis_cnt as f32)
-        .clamp(38.0 * s, 54.0 * s);
+        .clamp(34.0 * s, 52.0 * s);
 
     let mut clicked_group = false;
     let badge_letters = ["P", "A", "S", "J", "U", "H", "G", "F"];
@@ -1648,22 +1793,29 @@ fn draw_proxy_groups_card(
         );
 
         let avatar_c = egui::pos2(g_box.left() + 18.0 * s, g_box.center().y);
-        pgp.circle_filled(avatar_c, 11.0 * s, pal.bg_card);
+        pgp.circle_filled(avatar_c, 10.5 * s, pal.bg_card);
         let badge_ltr = badge_letters.get(g_i).copied().unwrap_or("G");
         pgp.text(
             avatar_c,
             egui::Align2::CENTER_CENTER,
             badge_ltr,
-            cup_font_med(10.5 * s),
+            cup_font_med(10.0 * s),
             pal.primary,
         );
 
-        let text_left = g_box.left() + 36.0 * s;
+        let text_left = g_box.left() + 35.0 * s;
+        let max_text_w = (g_box.right() - 10.0 * s - text_left).max(40.0);
+        let g_title = ellipsize_text(
+            ui,
+            &format_cupertino_title(g_name),
+            cup_font_med(11.2 * s),
+            max_text_w,
+        );
         pgp.text(
-            egui::pos2(text_left, g_box.top() + box_h * 0.33),
+            egui::pos2(text_left, g_box.top() + box_h * 0.34),
             egui::Align2::LEFT_CENTER,
-            format_cupertino_title(g_name),
-            cup_font_med(11.5 * s),
+            g_title,
+            cup_font_med(11.2 * s),
             pal.text_primary,
         );
 
@@ -1678,15 +1830,17 @@ fn draw_proxy_groups_card(
             draw_flag_icon(&pgp, f_r, flag, pal);
             sub_x += 16.5 * s;
         }
-        let clipped_gnow = pgp.with_clip_rect(egui::Rect::from_min_max(
-            egui::pos2(sub_x, sub_y - 9.0 * s),
-            egui::pos2(g_box.right() - 8.0 * s, sub_y + 9.0 * s),
-        ));
-        clipped_gnow.text(
+        let g_sub = ellipsize_text(
+            ui,
+            &format_cupertino_title(g_now),
+            cup_font_reg(10.0 * s),
+            (g_box.right() - 10.0 * s - sub_x).max(28.0),
+        );
+        pgp.text(
             egui::pos2(sub_x, sub_y),
             egui::Align2::LEFT_CENTER,
-            format_cupertino_title(g_now),
-            cup_font_reg(10.2 * s),
+            g_sub,
+            cup_font_reg(10.0 * s),
             pal.text_muted,
         );
 
