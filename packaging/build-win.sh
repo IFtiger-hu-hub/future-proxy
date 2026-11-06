@@ -21,20 +21,24 @@ if [ ! -f "$MINGW_CACHE/usr/x86_64-w64-mingw32/sys-root/mingw/lib/libmingwex.a" 
   popd >/dev/null
 fi
 
+RUST_WIN_LIB="$(rustc --print sysroot)/lib/rustlib/x86_64-pc-windows-gnu/lib"
 cat << EOF > /tmp/x86_64-w64-mingw32-gcc
 #!/usr/bin/env bash
 exec /usr/bin/clang --target=x86_64-pc-windows-gnu \\
   -fuse-ld="$RUST_BIN_DIR/gcc-ld/ld.lld" \\
   -nostdlib \\
+  "$MINGW_CACHE/usr/x86_64-w64-mingw32/sys-root/mingw/lib/crt2.o" \\
+  "$RUST_WIN_LIB/rsbegin.o" \\
   -L"$MINGW_CACHE/usr/x86_64-w64-mingw32/sys-root/mingw/lib" \\
   -L"$MINGW_CACHE/usr/lib64/gcc/x86_64-w64-mingw32/16.2.0" \\
-  "\$@"
+  "\$@" \\
+  "$RUST_WIN_LIB/rsend.o"
 EOF
 chmod +x /tmp/x86_64-w64-mingw32-gcc
 
 echo "==> [2/4] Compiling future-proxy.exe (x86_64-pc-windows-gnu)..."
 cd "$ROOT_DIR"
-PATH="/tmp:$PATH" RUSTFLAGS="-C link-self-contained=yes" cargo build --release --target x86_64-pc-windows-gnu
+PATH="/tmp:$PATH" RUSTFLAGS="-C link-self-contained=no" cargo build --release --target x86_64-pc-windows-gnu
 "$RUST_BIN_DIR/llvm-strip" "$ROOT_DIR/target/x86_64-pc-windows-gnu/release/future-proxy.exe"
 
 echo "==> [3/4] Assembling Windows 10/11 portable bundle..."

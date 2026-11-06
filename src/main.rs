@@ -4,6 +4,7 @@ use eframe::egui;
 use std::collections::HashMap;
 use std::io::BufRead;
 use std::path::PathBuf;
+#[cfg(unix)]
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -32,7 +33,9 @@ use crate::platform::{
     set_autostart, set_kde_proxy, spawn_ipc_listener, spawn_system_tray, systemd_active,
     take_single_instance, trim_process_memory, IpcListener, TrayFlags, TrayGuard,
 };
-use crate::state::{AppState, NavTab, ProfilesMeta, Subscription};
+#[cfg(unix)]
+use crate::state::ProfilesMeta;
+use crate::state::{AppState, NavTab, Subscription};
 use crate::theme::*;
 
 pub struct FutureProxyApp {
@@ -1433,11 +1436,23 @@ fn run_gui(rt: &AppRuntime) -> eframe::Result<()> {
         tray_flags: Arc::clone(&rt.tray_flags),
         egui_ctx_slot: Arc::clone(&rt.egui_ctx_slot),
     };
-    eframe::run_native(
+    let boot_fallback = boot.clone();
+    let res = eframe::run_native(
         "future-proxy",
         native_options(),
         Box::new(move |cc| Ok(Box::new(boot.clone().into_app(cc)))),
-    )
+    );
+    #[cfg(windows)]
+    if res.is_err() {
+        let mut opts = native_options();
+        opts.hardware_acceleration = eframe::HardwareAcceleration::Off;
+        return eframe::run_native(
+            "future-proxy",
+            opts,
+            Box::new(move |cc| Ok(Box::new(boot_fallback.clone().into_app(cc)))),
+        );
+    }
+    res
 }
 
 fn shutdown_core_if_needed(rt: &AppRuntime) {
@@ -1539,6 +1554,17 @@ fn tray_only_main() {
 }
 
 fn main() -> eframe::Result<()> {
+    #[cfg(windows)]
+    std::panic::set_hook(Box::new(|info| {
+        let msg = format!("Future Proxy 发生运行时错误:\n{info}");
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                let _ = std::fs::write(dir.join("future-proxy-error.log"), &msg);
+            }
+        }
+        crate::platform::win_os::show_error_dialog("Future Proxy 启动异常", &msg);
+    }));
+
     let start_in_tray = std::env::args().any(|a| a == "--tray");
 
     #[cfg(unix)]
@@ -1574,6 +1600,17 @@ fn main() -> eframe::Result<()> {
         if should_open_gui {
             if let Err(e) = run_gui(&rt) {
                 eprintln!("Future Proxy GUI error: {e}");
+                #[cfg(windows)]
+                {
+                    let msg = format!("无法初始化图形界面窗口 (OpenGL/WGL):\n{e}");
+                    if let Ok(exe) = std::env::current_exe() {
+                        if let Some(dir) = exe.parent() {
+                            let _ = std::fs::write(dir.join("future-proxy-error.log"), &msg);
+                        }
+                    }
+                    crate::platform::win_os::show_error_dialog("Future Proxy 图形界面错误", &msg);
+                    break;
+                }
             }
             *rt.egui_ctx_slot.lock().unwrap() = None;
         }

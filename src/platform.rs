@@ -116,6 +116,8 @@ pub fn spawn_ipc_listener(
             };
             match accept_result {
                 Ok((mut stream, _)) => {
+                    let _ = stream.set_nonblocking(false);
+                    let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
                     let mut buf = [0u8; 64];
                     if let Ok(n) = stream.read(&mut buf) {
                         let msg = String::from_utf8_lossy(&buf[..n]);
@@ -419,7 +421,7 @@ pub mod win_os {
             hwnd: isize,
             prc_rect: *const std::ffi::c_void,
         ) -> i32;
-        fn DestroyMenu(h_menu: hmenu_t) -> i32;
+        fn DestroyMenu(h_menu: HmenuT) -> i32;
         fn CreateIcon(
             h_instance: isize,
             n_width: i32,
@@ -430,9 +432,15 @@ pub mod win_os {
             lpb_xor_bits: *const u8,
         ) -> isize;
         fn DestroyIcon(h_icon: isize) -> i32;
+        fn MessageBoxW(
+            h_wnd: isize,
+            lp_text: *const u16,
+            lp_caption: *const u16,
+            u_type: u32,
+        ) -> i32;
     }
 
-    type hmenu_t = isize;
+    type HmenuT = isize;
 
     #[link(name = "shell32")]
     extern "system" {
@@ -590,7 +598,7 @@ pub mod win_os {
                 0,
                 0,
                 0,
-                -3isize,
+                0,
                 0,
                 h_instance,
                 std::ptr::null(),
@@ -634,6 +642,14 @@ pub mod win_os {
                 DestroyIcon(h_icon);
             }
         });
+    }
+
+    pub fn show_error_dialog(title: &str, message: &str) {
+        unsafe {
+            let t = to_wide(title);
+            let m = to_wide(message);
+            MessageBoxW(0, m.as_ptr(), t.as_ptr(), 0x0000_0010); // MB_ICONERROR
+        }
     }
 
     pub fn check_system_proxy() -> bool {
