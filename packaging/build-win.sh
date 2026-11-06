@@ -36,19 +36,19 @@ echo "==> [2/4] Compiling future-proxy.exe (x86_64-pc-windows-gnu)..."
 cd "$ROOT_DIR"
 PATH="/tmp:$PATH" RUSTFLAGS="-C link-self-contained=yes" cargo build --release --target x86_64-pc-windows-gnu
 "$RUST_BIN_DIR/llvm-strip" "$ROOT_DIR/target/x86_64-pc-windows-gnu/release/future-proxy.exe"
-cp -f "$ROOT_DIR/target/x86_64-pc-windows-gnu/release/future-proxy.exe" "$ROOT_DIR/future-proxy.exe"
 
 echo "==> [3/4] Assembling Windows 10/11 portable bundle..."
-mkdir -p "$BUNDLE_DIR"
-cp -f "$ROOT_DIR/future-proxy.exe" "$BUNDLE_DIR/future-proxy.exe"
-cp -f "$ROOT_DIR/packaging/config.yaml" "$BUNDLE_DIR/config.yaml"
-cp -f "$ROOT_DIR/packaging/country.mmdb" "$BUNDLE_DIR/country.mmdb"
-cp -f "$ROOT_DIR/packaging/geosite.dat" "$BUNDLE_DIR/geosite.dat"
+mkdir -p "$ROOT_DIR/Future-Proxy"
+cp -f "$ROOT_DIR/target/x86_64-pc-windows-gnu/release/future-proxy.exe" "$ROOT_DIR/Future-Proxy/future-proxy.exe"
+cp -f "$ROOT_DIR/packaging/config.yaml" "$ROOT_DIR/Future-Proxy/config.yaml"
+cp -f "$ROOT_DIR/packaging/country.mmdb" "$ROOT_DIR/Future-Proxy/country.mmdb"
+cp -f "$ROOT_DIR/packaging/geosite.dat" "$ROOT_DIR/Future-Proxy/geosite.dat"
 
 echo "==> [4/4] Creating Future-Proxy-${VERSION}-windows-x86_64.zip..."
-cd /tmp/win-bundle
+rm -f "$ROOT_DIR"/Future-Proxy-*-windows-x86_64.zip
+cd "$ROOT_DIR"
 python3 -m zipfile -c "$ROOT_DIR/Future-Proxy-${VERSION}-windows-x86_64.zip" Future-Proxy/
 
 echo "Done!"
-ls -lh "$ROOT_DIR/future-proxy.exe" "$ROOT_DIR/Future-Proxy-${VERSION}-windows-x86_64.zip"
+ls -lh "$ROOT_DIR/Future-Proxy/" "$ROOT_DIR/Future-Proxy-${VERSION}-windows-x86_64.zip"
 

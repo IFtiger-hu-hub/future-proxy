@@ -1,7 +1,7 @@
 use eframe::egui;
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
@@ -439,6 +439,19 @@ pub mod win_os {
         fn Shell_NotifyIconW(dw_message: u32, lp_data: *const NOTIFYICONDATAW) -> i32;
     }
 
+    #[repr(C)]
+    struct MEMORYSTATUSEX {
+        dw_length: u32,
+        dw_memory_load: u32,
+        ull_total_phys: u64,
+        ull_avail_phys: u64,
+        ull_total_page_file: u64,
+        ull_avail_page_file: u64,
+        ull_total_virtual: u64,
+        ull_avail_virtual: u64,
+        ull_avail_extended_virtual: u64,
+    }
+
     #[link(name = "kernel32")]
     extern "system" {
         fn GetModuleHandleW(lp_module_name: *const u16) -> isize;
@@ -447,6 +460,7 @@ pub mod win_os {
         fn CloseHandle(h_object: isize) -> i32;
         fn K32GetProcessMemoryInfo(process: isize, ppsmem_counters: *mut PROCESS_MEMORY_COUNTERS, cb: u32) -> i32;
         fn K32EmptyWorkingSet(h_process: isize) -> i32;
+        fn GlobalMemoryStatusEx(lp_buffer: *mut MEMORYSTATUSEX) -> i32;
     }
 
     #[link(name = "advapi32")]
@@ -745,14 +759,14 @@ pub mod win_os {
         }
     }
 
-    pub fn read_process_rss_kb(pid: Option<u32>) -> u64 {
+    pub fn read_process_mem_kb(pid: Option<u32>) -> (u64, u64) {
         unsafe {
             let handle = match pid {
                 None => GetCurrentProcess(),
                 Some(p) => {
                     let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, p);
                     if h == 0 {
-                        return 0;
+                        return (0, 0);
                     }
                     h
                 }
@@ -764,9 +778,30 @@ pub mod win_os {
                 CloseHandle(handle);
             }
             if ok != 0 {
-                (pmc.working_set_size / 1024) as u64
+                let rss = (pmc.working_set_size / 1024) as u64;
+                let priv_kb = if pmc.pagefile_usage > 0 {
+                    (pmc.pagefile_usage / 1024) as u64
+                } else {
+                    rss
+                };
+                (priv_kb, rss)
             } else {
-                0
+                (0, 0)
+            }
+        }
+    }
+
+    pub fn read_sys_mem_gb() -> (f32, f32) {
+        unsafe {
+            let mut ms: MEMORYSTATUSEX = std::mem::zeroed();
+            ms.dw_length = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
+            if GlobalMemoryStatusEx(&mut ms) != 0 && ms.ull_total_phys > 0 {
+                let total_gb = ms.ull_total_phys as f32 / (1024.0 * 1024.0 * 1024.0);
+                let used_bytes = ms.ull_total_phys.saturating_sub(ms.ull_avail_phys);
+                let used_gb = used_bytes as f32 / (1024.0 * 1024.0 * 1024.0);
+                (used_gb, total_gb)
+            } else {
+                (0.0, 0.0)
             }
         }
     }

@@ -151,25 +151,37 @@ pub fn collect_memory_telemetry(core_pid: Option<u32>) -> MemoryTelemetry {
     }
     #[cfg(windows)]
     {
-        let gui_rss_kb = crate::platform::win_os::read_process_rss_kb(None);
-        let core_rss_kb = read_core_rss_kb_win(core_pid);
+        let (gui_kb, gui_rss_kb) = crate::platform::win_os::read_process_mem_kb(None);
+        let (core_kb, core_rss_kb) = read_core_rss_kb_win(core_pid);
+        let (sys_used_gb, sys_total_gb) = crate::platform::win_os::read_sys_mem_gb();
         MemoryTelemetry {
-            gui_kb: gui_rss_kb,
+            gui_kb,
             gui_rss_kb,
-            core_kb: core_rss_kb,
+            core_kb,
             core_rss_kb,
-            sys_used_gb: 0.0,
-            sys_total_gb: 0.0,
+            sys_used_gb,
+            sys_total_gb,
         }
     }
 }
 
 #[cfg(windows)]
-fn read_core_rss_kb_win(child_pid: Option<u32>) -> u64 {
+fn read_core_rss_kb_win(child_pid: Option<u32>) -> (u64, u64) {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static CACHED_CORE_PID: AtomicU32 = AtomicU32::new(0);
+
     if let Some(pid) = child_pid {
-        let kb = crate::platform::win_os::read_process_rss_kb(Some(pid));
-        if kb > 0 {
-            return kb;
+        let (priv_kb, rss_kb) = crate::platform::win_os::read_process_mem_kb(Some(pid));
+        if rss_kb > 0 {
+            CACHED_CORE_PID.store(pid, Ordering::Relaxed);
+            return (priv_kb, rss_kb);
+        }
+    }
+    let cached = CACHED_CORE_PID.load(Ordering::Relaxed);
+    if cached > 0 {
+        let (priv_kb, rss_kb) = crate::platform::win_os::read_process_mem_kb(Some(cached));
+        if rss_kb > 0 {
+            return (priv_kb, rss_kb);
         }
     }
     use std::os::windows::process::CommandExt;
@@ -184,16 +196,18 @@ fn read_core_rss_kb_win(child_pid: Option<u32>) -> u64 {
                 let parts: Vec<&str> = line.split("\",\"").collect();
                 if parts.len() >= 2 {
                     if let Ok(pid) = parts[1].trim_matches('"').parse::<u32>() {
-                        let kb = crate::platform::win_os::read_process_rss_kb(Some(pid));
-                        if kb > 0 {
-                            return kb;
+                        let (priv_kb, rss_kb) =
+                            crate::platform::win_os::read_process_mem_kb(Some(pid));
+                        if rss_kb > 0 {
+                            CACHED_CORE_PID.store(pid, Ordering::Relaxed);
+                            return (priv_kb, rss_kb);
                         }
                     }
                 }
             }
         }
     }
-    0
+    (0, 0)
 }
 
 pub fn reload_core(config: &Path) -> Result<(), String> {
