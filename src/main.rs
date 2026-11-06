@@ -21,12 +21,12 @@ mod ui_tabs;
 
 use crate::config_patch::{
     chrono_like_now, detect_intranet_ip, extract_yaml_traffic_hints, is_info_node,
-    looks_like_clash_config, parse_subscription_userinfo, region_match, MIXED_PORT,
+    parse_subscription_userinfo, region_match, MIXED_PORT,
 };
 use crate::core_api::{
     api, auth, close_all_connections, collect_memory_telemetry, fetch_connections, fetch_proxies,
-    patch_allow_lan, patch_core_mode, put_select, reload_core, test_delay, test_delay_with_url,
-    test_delays, CoreManager,
+    fetch_subscription_content, is_http_url, patch_allow_lan, patch_core_mode, put_select,
+    reload_core, test_delay, test_delay_with_url, test_delays, CoreManager,
 };
 use crate::platform::{
     build_brand_rgba_icon, check_kde_proxy_enabled, release_instance, request_repaint_slot,
@@ -116,7 +116,7 @@ impl AppRuntime {
                             .ensure_running(&config_dir, alive, prefer_systemd);
                     if alive && !initial_reloaded {
                         initial_reloaded = true;
-                        let _ = reload_core(&config_dir);
+                        let _ = reload_core(&config_dir.join("config.yaml"));
                     }
 
                     let snapshot = if alive && last_nodes.elapsed() > Duration::from_secs(3) {
@@ -696,43 +696,38 @@ impl FutureProxyApp {
         });
     }
 
-    /// 下载订阅（新导入或更新已有），保存原始内容，若为激活订阅则重载内核
+    /// 下载订阅或导入本地 YAML 文件（新导入或更新已有），保存原始内容，若为激活订阅则重载内核并立即刷新节点
     fn download_sub(&self, existing_id: Option<String>, name: String, url: String) {
         let state = Arc::clone(&self.state);
+        let core = Arc::clone(&self.core);
         let ctx = self.ctx.clone();
+        let is_remote = is_http_url(&url);
         {
             let mut app = state.lock().unwrap();
             app.is_updating_sub = true;
-            app.status_msg = format!("正在下载订阅 [{}]...", name);
+            app.status_msg = if is_remote {
+                format!("↻ 正在下载订阅 [{}]...", name)
+            } else {
+                format!("↻ 正在导入本地 YAML 配置 [{}]...", name)
+            };
         }
+        ctx.request_repaint();
         std::thread::spawn(move || {
-            let result = ureq::get(&url)
-                .set("User-Agent", "FlClash/v0.8.86 clash-verge clash.meta mihomo")
-                .timeout(Duration::from_secs(20))
-                .call()
-                .map_err(|e| format!("✗ 订阅下载失败: {}", e))
-                .and_then(|r| {
-                    let userinfo = r
-                        .header("subscription-userinfo")
-                        .map(|s| s.to_string())
-                        .unwrap_or_default();
-                    r.into_string()
-                        .map(|body| (body, userinfo))
-                        .map_err(|e| format!("✗ 读取订阅失败: {}", e))
-                })
-                .and_then(|(body, userinfo)| {
-                    if looks_like_clash_config(&body) {
-                        Ok((body, userinfo))
-                    } else {
-                        Err("✗ 订阅内容不是 Clash/Mihomo 格式，请检查订阅链接".to_string())
-                    }
-                });
+            let fallback_path = {
+                let app = state.lock().unwrap();
+                existing_id.as_ref().map(|id| app.sub_file(id))
+            };
+            let result = fetch_subscription_content(&url, fallback_path.as_deref());
 
             let mut app = state.lock().unwrap();
             app.is_updating_sub = false;
             match result {
                 Ok((body, userinfo)) => {
-                    let now = chrono_like_now();
+                    let now = if is_remote {
+                        chrono_like_now()
+                    } else {
+                        format!("本地 YAML · {}", chrono_like_now())
+                    };
                     let (up, down, tot, exp) = parse_subscription_userinfo(&userinfo);
                     let (rem_hint, exp_hint) = extract_yaml_traffic_hints(&body);
                     let id = existing_id.unwrap_or_else(|| {
@@ -741,7 +736,7 @@ impl FutureProxyApp {
                             std::time::SystemTime::now()
                                 .duration_since(std::time::UNIX_EPOCH)
                                 .unwrap()
-                                .as_secs()
+                                .as_millis()
                         )
                     });
                     if let Err(e) = std::fs::write(app.sub_file(&id), &body) {
@@ -780,20 +775,45 @@ impl FutureProxyApp {
                         }
                         app.save_profiles();
                         if app.profiles.active == id {
-                            let msg = match app.write_active_config() {
+                            let write_res = app.write_active_config();
+                            let cfg = app.active_config();
+                            let config_dir = app.config_dir.clone();
+                            let prefer_systemd = app.profiles.autostart;
+                            drop(app);
+
+                            let msg = match write_res {
                                 Ok(()) => {
-                                    let cfg = app.active_config();
-                                    drop(app);
-                                    match reload_core(&cfg) {
-                                        Ok(()) => format!("✓ 订阅 [{}] 已更新并生效", name),
+                                    let mut r = reload_core(&cfg);
+                                    if r.is_err() {
+                                        let _ = core.lock().unwrap().ensure_running(
+                                            &config_dir,
+                                            false,
+                                            prefer_systemd,
+                                        );
+                                        std::thread::sleep(Duration::from_millis(450));
+                                        r = reload_core(&cfg);
+                                    }
+                                    match r {
+                                        Ok(()) => format!("✓ 订阅 [{}] 已导入并生效", name),
                                         Err(e) => format!("✗ {}", e),
                                     }
                                 }
                                 Err(e) => e,
                             };
+                            let snap = fetch_proxies("", false);
                             let mut app = state.lock().unwrap();
                             app.status_msg = msg;
                             app.group_picked_by_user = false;
+                            if let Some(s) = snap {
+                                app.groups = s.groups;
+                                app.group_summaries = s.group_summaries;
+                                app.group_name = s.group_name;
+                                app.current_selected = s.current;
+                                app.resolved_node = s.resolved_node;
+                                app.resolved_delay = s.resolved_delay;
+                                app.nodes = s.nodes;
+                                app.is_core_alive = true;
+                            }
                         } else {
                             app.status_msg = format!("✓ 订阅 [{}] 已更新", name);
                         }
@@ -820,9 +840,19 @@ impl FutureProxyApp {
                 Ok(()) => msg_ok.to_string(),
                 Err(e) => e,
             };
+            let snap = fetch_proxies("", false);
             let mut app = state.lock().unwrap();
             app.status_msg = msg;
             app.group_picked_by_user = false;
+            if let Some(s) = snap {
+                app.groups = s.groups;
+                app.group_summaries = s.group_summaries;
+                app.group_name = s.group_name;
+                app.current_selected = s.current;
+                app.resolved_node = s.resolved_node;
+                app.resolved_delay = s.resolved_delay;
+                app.nodes = s.nodes;
+            }
             drop(app);
             ctx.request_repaint();
         });
@@ -1142,6 +1172,7 @@ impl eframe::App for FutureProxyApp {
                                 &mut action_update_sub,
                                 &mut action_delete_sub,
                                 &mut action_switch_sub,
+                                &mut action_import,
                             );
                         }
                         NavTab::Connections => {
@@ -1284,6 +1315,17 @@ impl eframe::App for FutureProxyApp {
             }
             self.select_node(node_name);
         }
+        // 支持直接拖拽本地 .yaml / .yml 文件到窗口任意位置快速导入
+        let dropped = ctx.input(|i| i.raw.dropped_files.clone());
+        for file in dropped {
+            if let Some(path) = file.path {
+                let path_str = path.to_string_lossy().to_string();
+                let name = ui_proxies::infer_sub_name("", &path_str);
+                action_import = Some((name, path_str));
+                break;
+            }
+        }
+
         if let Some((name, url)) = action_import {
             self.download_sub(None, name, url);
         }

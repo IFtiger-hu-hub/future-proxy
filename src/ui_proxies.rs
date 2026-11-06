@@ -897,6 +897,24 @@ pub fn render_more_popover(ctx: &egui::Context, app: &mut AppState, pal: &ThemeP
     }
 }
 
+pub fn infer_sub_name(raw_name: &str, url_or_path: &str) -> String {
+    let trimmed_name = raw_name.trim();
+    if !trimmed_name.is_empty() {
+        return trimmed_name.to_string();
+    }
+    let src = url_or_path.trim().trim_matches(|c| c == '"' || c == '\'');
+    if !crate::core_api::is_http_url(src) {
+        let p = crate::core_api::normalize_local_path(src);
+        if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+            let clean = stem.trim();
+            if !clean.is_empty() {
+                return clean.to_string();
+            }
+        }
+    }
+    "新订阅".to_string()
+}
+
 pub fn render_import_modal(
     ctx: &egui::Context,
     app: &mut AppState,
@@ -919,15 +937,10 @@ pub fn render_import_modal(
                 egui::Color32::from_rgba_unmultiplied(0, 0, 0, 120),
             );
 
-            let sheet_w = (screen_rect.width() - 32.0).clamp(280.0, 430.0);
-            let sheet_h = 250.0;
+            let sheet_w = (screen_rect.width() - 32.0).clamp(320.0, 460.0);
+            let sheet_h = 276.0;
             let sheet_rect =
                 egui::Rect::from_center_size(screen_rect.center(), egui::vec2(sheet_w, sheet_h));
-            let _ = ui.interact(
-                sheet_rect,
-                ui.id().with("import_sheet_body"),
-                egui::Sense::click(),
-            );
 
             let sp = ui.painter();
             sp.rect_filled(
@@ -947,10 +960,34 @@ pub fn render_import_modal(
             s_ui.vertical(|ui| {
                 ui.horizontal(|ui| {
                     let g = ui.fonts(|f| {
-                        f.layout_no_wrap("添加新订阅".to_string(), cup_font_med(15.0), pal.text_primary)
+                        f.layout_no_wrap(
+                            "导入订阅 / YAML 配置".to_string(),
+                            cup_font_med(15.0),
+                            pal.text_primary,
+                        )
                     });
                     let (r, _) = ui.allocate_exact_size(g.size(), egui::Sense::hover());
                     ui.painter().galley(r.min, g, pal.text_primary);
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if cupertino_button(
+                            ui,
+                            "选择本地 YAML…",
+                            Some(CupIcon::Doc),
+                            CupBtnStyle::Tinted(pal.primary),
+                            true,
+                            pal,
+                        ) {
+                            if let Some(path) = crate::platform::pick_yaml_file() {
+                                if app.import_name.trim().is_empty() {
+                                    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                                        app.import_name = stem.to_string();
+                                    }
+                                }
+                                app.import_url = path.to_string_lossy().to_string();
+                            }
+                        }
+                    });
                 });
                 ui.add_space(12.0);
 
@@ -979,7 +1016,7 @@ pub fn render_import_modal(
                 fp.text(
                     egui::pos2(r1.left() + 14.0, r1.center().y),
                     egui::Align2::LEFT_CENTER,
-                    "订阅名称",
+                    "配置名称",
                     cup_font_med(12.5),
                     pal.text_primary,
                 );
@@ -994,7 +1031,7 @@ pub fn render_import_modal(
                         .font(cup_font_reg(12.5))
                         .text_color(pal.text_primary)
                         .hint_text(
-                            egui::RichText::new("例如：主力节点 / 备用机场")
+                            egui::RichText::new("选填，例如：主力节点 / 本地配置")
                                 .color(pal.text_tertiary)
                                 .size(12.0),
                         )
@@ -1008,7 +1045,7 @@ pub fn render_import_modal(
                 fp.text(
                     egui::pos2(r2.left() + 14.0, r2.center().y),
                     egui::Align2::LEFT_CENTER,
-                    "订阅地址",
+                    "订阅来源",
                     cup_font_med(12.5),
                     pal.text_primary,
                 );
@@ -1023,33 +1060,55 @@ pub fn render_import_modal(
                         .font(cup_font_reg(12.5))
                         .text_color(pal.text_primary)
                         .hint_text(
-                            egui::RichText::new("https://… (Clash / Mihomo 订阅链接)")
+                            egui::RichText::new("https://… 订阅链接 或 本地 .yaml 文件路径")
                                 .color(pal.text_tertiary)
                                 .size(12.0),
                         )
                         .desired_width(e2_rect.width()),
                 );
 
-                ui.add_space(18.0);
+                ui.add_space(8.0);
+                let tip_g = ui.fonts(|f| {
+                    f.layout_no_wrap(
+                        "支持 HTTP/HTTPS 机场订阅链接、本地 .yaml/.yml 文件，或直接将 YAML 文件拖入窗口"
+                            .to_string(),
+                        cup_font_reg(11.0),
+                        pal.text_tertiary,
+                    )
+                });
+                let (tip_r, _) =
+                    ui.allocate_exact_size(egui::vec2(form_w, 16.0), egui::Sense::hover());
+                ui.painter()
+                    .with_clip_rect(tip_r)
+                    .galley(tip_r.min, tip_g, pal.text_tertiary);
+
+                ui.add_space(12.0);
+                let can_submit = !app.import_url.trim().is_empty();
+                let enter_pressed = can_submit && ctx.input(|i| i.key_pressed(egui::Key::Enter));
                 ui.horizontal(|ui| {
                     if cupertino_button(ui, "取消", None, CupBtnStyle::Secondary, true, pal) {
                         close = true;
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let can_submit = !app.import_url.trim().is_empty();
+                        let btn_label = if crate::core_api::is_http_url(&app.import_url)
+                            || app.import_url.trim().is_empty()
+                        {
+                            "下载并导入"
+                        } else {
+                            "导入 YAML 配置"
+                        };
                         if cupertino_button(
                             ui,
-                            "下载并添加",
+                            btn_label,
                             None,
                             CupBtnStyle::Filled(pal.primary),
                             can_submit,
                             pal,
-                        ) {
-                            let mut name = app.import_name.trim().to_string();
-                            if name.is_empty() {
-                                name = "新订阅".to_string();
-                            }
-                            *action_import = Some((name, app.import_url.trim().to_string()));
+                        ) || enter_pressed
+                        {
+                            let url_or_path = app.import_url.trim().to_string();
+                            let name = infer_sub_name(&app.import_name, &url_or_path);
+                            *action_import = Some((name, url_or_path));
                             close = true;
                         }
                     });

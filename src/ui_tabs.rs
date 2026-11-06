@@ -20,6 +20,7 @@ pub fn render_profiles_tab(
     action_update_sub: &mut Option<Subscription>,
     action_delete_sub: &mut Option<String>,
     action_switch_sub: &mut Option<String>,
+    action_import: &mut Option<(String, String)>,
 ) {
     egui::Frame::none()
         .inner_margin(egui::Margin::symmetric(6.0, 0.0))
@@ -42,27 +43,112 @@ pub fn render_profiles_tab(
                     ) {
                         app.show_import_dialog = true;
                     }
+                    ui.add_space(6.0);
+                    if cupertino_button(
+                        ui,
+                        "导入 YAML 文件",
+                        Some(CupIcon::Doc),
+                        CupBtnStyle::Tinted(pal.primary),
+                        true,
+                        pal,
+                    ) {
+                        if let Some(path) = crate::platform::pick_yaml_file() {
+                            let path_str = path.to_string_lossy().to_string();
+                            let name = crate::ui_proxies::infer_sub_name("", &path_str);
+                            *action_import = Some((name, path_str));
+                        }
+                    }
                 });
             });
         });
 
     ui.add_space(10.0);
 
+    // 显式渲染订阅导入/更新进度与状态提示条
+    if app.is_updating_sub || (!app.status_msg.is_empty() && app.status_msg != "就绪") {
+        egui::Frame::none()
+            .inner_margin(egui::Margin::symmetric(6.0, 0.0))
+            .show(ui, |ui| {
+                let (b_rect, _) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), 36.0),
+                    egui::Sense::hover(),
+                );
+                let bp = ui.painter().clone();
+                let is_err = app.status_msg.starts_with('✗');
+                let is_busy = app.is_updating_sub
+                    || app.status_msg.starts_with('↻')
+                    || app.status_msg.starts_with("正在");
+                let (bg_col, fg_col) = if is_err {
+                    (
+                        egui::Color32::from_rgba_unmultiplied(
+                            pal.red.r(),
+                            pal.red.g(),
+                            pal.red.b(),
+                            26,
+                        ),
+                        pal.red,
+                    )
+                } else if is_busy {
+                    (pal.bg_selected, pal.primary)
+                } else {
+                    (
+                        egui::Color32::from_rgba_unmultiplied(
+                            pal.green.r(),
+                            pal.green.g(),
+                            pal.green.b(),
+                            26,
+                        ),
+                        pal.green,
+                    )
+                };
+                bp.rect_filled(b_rect, 10.0, bg_col);
+                let msg_txt = ellipsize_text(
+                    ui,
+                    &app.status_msg,
+                    cup_font_med(12.0),
+                    b_rect.width() - 28.0,
+                );
+                let mg = ui.fonts(|f| f.layout_no_wrap(msg_txt, cup_font_med(12.0), fg_col));
+                bp.galley(
+                    egui::pos2(
+                        b_rect.left() + 14.0,
+                        b_rect.center().y - mg.size().y * 0.5,
+                    ),
+                    mg,
+                    fg_col,
+                );
+            });
+        ui.add_space(8.0);
+    }
+
     let subs = app.profiles.subscriptions.clone();
     let active_id = app.profiles.active.clone();
 
     if subs.is_empty() {
-        let (empty_rect, _) =
-            ui.allocate_exact_size(egui::vec2(ui.available_width(), 148.0), egui::Sense::hover());
-        let ep = ui.painter().clone();
-        draw_bento_card(&ep, empty_rect, 16.0, pal.bg_card, pal);
-        ep.text(
-            empty_rect.center(),
-            egui::Align2::CENTER_CENTER,
-            "暂无订阅配置，点击右上角「导入新订阅」添加机场链接",
-            cup_font_reg(13.0),
-            pal.text_secondary,
-        );
+        egui::Frame::none()
+            .inner_margin(egui::Margin::symmetric(6.0, 0.0))
+            .show(ui, |ui| {
+                let (empty_rect, _) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), 148.0),
+                    egui::Sense::hover(),
+                );
+                let ep = ui.painter().clone();
+                draw_bento_card(&ep, empty_rect, 16.0, pal.bg_card, pal);
+                ep.text(
+                    empty_rect.center() - egui::vec2(0.0, 10.0),
+                    egui::Align2::CENTER_CENTER,
+                    "暂无订阅配置，点击右上角「导入新订阅」或「导入 YAML 文件」",
+                    cup_font_med(13.0),
+                    pal.text_secondary,
+                );
+                ep.text(
+                    empty_rect.center() + egui::vec2(0.0, 12.0),
+                    egui::Align2::CENTER_CENTER,
+                    "支持 Clash / Mihomo 机场订阅链接，或直接将本地 .yaml / .yml 文件拖入窗口",
+                    cup_font_reg(11.5),
+                    pal.text_tertiary,
+                );
+            });
         return;
     }
 

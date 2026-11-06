@@ -314,7 +314,13 @@ pub fn format_proto_name(raw_type: &str) -> String {
 }
 
 pub fn looks_like_clash_config(body: &str) -> bool {
-    body.lines().any(|l| l.starts_with("proxies:") || l.starts_with("proxy-providers:"))
+    let clean = body.trim_start_matches('\u{feff}');
+    clean.lines().any(|l| {
+        let t = l.trim_start();
+        t.starts_with("proxies:")
+            || t.starts_with("proxy-providers:")
+            || t.starts_with("proxy-groups:")
+    })
 }
 
 const SMART_GROUPS_DEF: &str = r#"  - name: "⚡ 🌍 非港台-自动优选"
@@ -429,6 +435,7 @@ pub fn patch_subscription(raw_yaml: &str, tun: bool) -> String {
 }
 
 pub fn patch_subscription_with_mode(raw_yaml: &str, tun: bool, mode: &str) -> String {
+    let raw_yaml = raw_yaml.trim_start_matches('\u{feff}');
     let mut has_native_dns = false;
     let mut in_raw_old_patch = false;
     let mut in_dns_block = false;

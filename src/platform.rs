@@ -448,6 +448,38 @@ pub mod win_os {
     }
 
     #[repr(C)]
+    struct OPENFILENAMEW {
+        l_struct_size: u32,
+        hwnd_owner: isize,
+        h_instance: isize,
+        lpstr_filter: *const u16,
+        lpstr_custom_filter: *mut u16,
+        n_max_cust_filter: u32,
+        n_filter_index: u32,
+        lpstr_file: *mut u16,
+        n_max_file: u32,
+        lpstr_file_title: *mut u16,
+        n_max_file_title: u32,
+        lpstr_initial_dir: *const u16,
+        lpstr_title: *const u16,
+        flags: u32,
+        n_file_offset: u16,
+        n_file_extension: u16,
+        lpstr_def_ext: *const u16,
+        l_cust_data: isize,
+        lpfn_hook: isize,
+        lp_template_name: *const u16,
+        pv_reserved: *mut std::ffi::c_void,
+        dw_reserved: u32,
+        flags_ex: u32,
+    }
+
+    #[link(name = "comdlg32")]
+    extern "system" {
+        fn GetOpenFileNameW(lpofn: *mut OPENFILENAMEW) -> i32;
+    }
+
+    #[repr(C)]
     struct MEMORYSTATUSEX {
         dw_length: u32,
         dw_memory_load: u32,
@@ -826,6 +858,88 @@ pub mod win_os {
         unsafe {
             let _ = K32EmptyWorkingSet(GetCurrentProcess());
         }
+    }
+
+    pub fn pick_yaml_file_dialog() -> Option<PathBuf> {
+        unsafe {
+            let filter: Vec<u16> =
+                "YAML 配置文件 (*.yaml;*.yml)\0*.yaml;*.yml\0所有文件 (*.*)\0*.*\0\0"
+                    .encode_utf16()
+                    .collect();
+            let title = to_wide("选择 Clash / Mihomo YAML 订阅配置文件");
+            let def_ext = to_wide("yaml");
+            let mut file_buf = vec![0u16; 1024];
+
+            let mut ofn: OPENFILENAMEW = std::mem::zeroed();
+            ofn.l_struct_size = std::mem::size_of::<OPENFILENAMEW>() as u32;
+            ofn.lpstr_filter = filter.as_ptr();
+            ofn.n_filter_index = 1;
+            ofn.lpstr_file = file_buf.as_mut_ptr();
+            ofn.n_max_file = file_buf.len() as u32;
+            ofn.lpstr_title = title.as_ptr();
+            ofn.lpstr_def_ext = def_ext.as_ptr();
+            // OFN_FILEMUSTEXIST (0x1000) | OFN_PATHMUSTEXIST (0x0800) | OFN_NOCHANGEDIR (0x0008) | OFN_EXPLORER (0x00080000)
+            ofn.flags = 0x0008_1808;
+
+            if GetOpenFileNameW(&mut ofn) != 0 {
+                let len = file_buf.iter().position(|&c| c == 0).unwrap_or(file_buf.len());
+                if len > 0 {
+                    let s = String::from_utf16_lossy(&file_buf[..len]);
+                    return Some(PathBuf::from(s));
+                }
+            }
+            None
+        }
+    }
+}
+
+/// 打开原生系统文件对话框选择本地 `.yaml` / `.yml` 配置文件
+pub fn pick_yaml_file() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        win_os::pick_yaml_file_dialog()
+    }
+    #[cfg(unix)]
+    {
+        let home = dirs::home_dir()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| ".".to_string());
+        if let Ok(out) = Command::new("kdialog")
+            .args([
+                "--title",
+                "选择 Clash / Mihomo YAML 订阅配置文件",
+                "--getopenfilename",
+                &home,
+                "*.yaml *.yml *.YAML *.YML|YAML 配置文件 (*.yaml, *.yml)\n*|所有文件 (*)",
+            ])
+            .output()
+        {
+            if out.status.success() {
+                let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if !p.is_empty() {
+                    return Some(PathBuf::from(p));
+                }
+            } else {
+                return None;
+            }
+        }
+        if let Ok(out) = Command::new("zenity")
+            .args([
+                "--file-selection",
+                "--title=选择 Clash / Mihomo YAML 订阅配置文件",
+                "--file-filter=YAML 配置文件 (*.yaml, *.yml) | *.yaml *.yml *.YAML *.YML",
+                "--file-filter=所有文件 | *",
+            ])
+            .output()
+        {
+            if out.status.success() {
+                let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if !p.is_empty() {
+                    return Some(PathBuf::from(p));
+                }
+            }
+        }
+        None
     }
 }
 

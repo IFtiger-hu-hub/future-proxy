@@ -3,7 +3,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use crate::config_patch::{format_proto_name, match_flag, API_HOST, DEFAULT_SECRET};
+use crate::config_patch::{
+    format_proto_name, looks_like_clash_config, match_flag, API_HOST, DEFAULT_SECRET, MIXED_PORT,
+};
 use crate::platform::systemd_active;
 use crate::state::{LiveConnItem, ProxyNode};
 
@@ -208,6 +210,164 @@ fn read_core_rss_kb_win(child_pid: Option<u32>) -> (u64, u64) {
         }
     }
     (0, 0)
+}
+
+pub fn is_http_url(source: &str) -> bool {
+    let s = source.trim().trim_matches(|c| c == '"' || c == '\'');
+    let lower = s.to_ascii_lowercase();
+    lower.starts_with("http://") || lower.starts_with("https://")
+}
+
+pub fn normalize_local_path(source: &str) -> PathBuf {
+    let mut s = source.trim().trim_matches(|c| c == '"' || c == '\'').to_string();
+    if let Some(rest) = s.strip_prefix("file:///") {
+        #[cfg(windows)]
+        {
+            s = rest.replace('/', "\\");
+        }
+        #[cfg(unix)]
+        {
+            s = format!("/{}", rest);
+        }
+    } else if let Some(rest) = s.strip_prefix("file://") {
+        s = rest.to_string();
+    } else if s.starts_with("~/") || s.starts_with("~\\") {
+        if let Some(home) = dirs::home_dir() {
+            s = home.join(&s[2..]).to_string_lossy().to_string();
+        }
+    }
+    PathBuf::from(s)
+}
+
+fn build_sub_agent(
+    #[allow(unused_variables)] accept_invalid_certs: bool,
+    use_local_proxy: bool,
+) -> Result<ureq::Agent, String> {
+    let mut builder = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(10))
+        .timeout_read(Duration::from_secs(20))
+        .timeout(Duration::from_secs(25));
+    #[cfg(windows)]
+    {
+        let tls = if accept_invalid_certs {
+            native_tls::TlsConnector::builder()
+                .danger_accept_invalid_certs(true)
+                .danger_accept_invalid_hostnames(true)
+                .build()
+        } else {
+            native_tls::TlsConnector::new()
+        }
+        .map_err(|e| format!("初始化系统 TLS 失败: {}", e))?;
+        builder = builder.tls_connector(std::sync::Arc::new(tls));
+    }
+    if use_local_proxy {
+        if let Ok(proxy) = ureq::Proxy::new(&format!("http://127.0.0.1:{}", MIXED_PORT)) {
+            builder = builder.proxy(proxy);
+        }
+    }
+    Ok(builder.build())
+}
+
+fn do_http_get_sub(agent: &ureq::Agent, url: &str) -> Result<(String, String), String> {
+    let resp = agent
+        .get(url)
+        .set(
+            "User-Agent",
+            "FlClash/v0.8.86 clash-verge/v1.7.7 clash.meta mihomo/1.18.9",
+        )
+        .call()
+        .map_err(|e| format!("{}", e))?;
+    let userinfo = resp
+        .header("subscription-userinfo")
+        .or_else(|| resp.header("Subscription-Userinfo"))
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+    let body = resp
+        .into_string()
+        .map_err(|e| format!("读取响应内容失败: {}", e))?;
+    Ok((body.trim_start_matches('\u{feff}').to_string(), userinfo))
+}
+
+/// 获取订阅配置内容：同时支持 HTTP/HTTPS 远程订阅链接与本地 `.yaml` / `.yml` 文件路径
+pub fn fetch_subscription_content(
+    source: &str,
+    fallback_local: Option<&Path>,
+) -> Result<(String, String), String> {
+    let trimmed = source.trim();
+    if trimmed.is_empty() {
+        return Err("✗ 订阅链接或 YAML 文件路径不能为空".to_string());
+    }
+
+    if !is_http_url(trimmed) {
+        let local_path = normalize_local_path(trimmed);
+        let bytes = std::fs::read(&local_path)
+            .or_else(|e| {
+                if let Some(fb) = fallback_local {
+                    if fb.exists() {
+                        return std::fs::read(fb);
+                    }
+                }
+                Err(e)
+            })
+            .map_err(|e| format!("✗ 读取本地 YAML 文件失败 ({}): {}", local_path.display(), e))?;
+        let body = String::from_utf8_lossy(&bytes)
+            .trim_start_matches('\u{feff}')
+            .to_string();
+        if looks_like_clash_config(&body) {
+            return Ok((body, String::new()));
+        }
+        return Err(
+            "✗ 所选文件不是有效的 Clash / Mihomo YAML 配置（需包含 proxies 或 proxy-providers）"
+                .to_string(),
+        );
+    }
+
+    let url = trimmed.trim_matches(|c| c == '"' || c == '\'');
+    let try_fetch = |target_url: &str| -> Result<(String, String), String> {
+        let agent = build_sub_agent(false, false)?;
+        match do_http_get_sub(&agent, target_url) {
+            Ok(ok) => Ok(ok),
+            Err(first_err) => {
+                #[cfg(windows)]
+                if let Ok(agent_insecure) = build_sub_agent(true, false) {
+                    if let Ok(ok) = do_http_get_sub(&agent_insecure, target_url) {
+                        return Ok(ok);
+                    }
+                }
+                if let Ok(agent_proxy) = build_sub_agent(true, true) {
+                    if let Ok(ok) = do_http_get_sub(&agent_proxy, target_url) {
+                        return Ok(ok);
+                    }
+                }
+                Err(format!("✗ 订阅下载失败: {}", first_err))
+            }
+        }
+    };
+
+    let (body, userinfo) = try_fetch(url)?;
+    if looks_like_clash_config(&body) {
+        return Ok((body, userinfo));
+    }
+
+    // 部分机场链接未带 flag=clash 时默认下发 Base64 节点列表，自动追加 flag=clash 重试一次
+    if !url.to_ascii_lowercase().contains("flag=") {
+        let sep = if url.contains('?') { "&" } else { "?" };
+        let clash_url = format!("{}{}flag=clash", url, sep);
+        if let Ok((body2, userinfo2)) = try_fetch(&clash_url) {
+            if looks_like_clash_config(&body2) {
+                return Ok((
+                    body2,
+                    if userinfo2.is_empty() {
+                        userinfo
+                    } else {
+                        userinfo2
+                    },
+                ));
+            }
+        }
+    }
+
+    Err("✗ 订阅内容不是 Clash/Mihomo YAML 格式，请检查订阅链接或直接导入本地 .yaml 文件".to_string())
 }
 
 pub fn reload_core(config: &Path) -> Result<(), String> {
