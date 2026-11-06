@@ -333,149 +333,159 @@ pub fn render_proxies_tab(
         .id_salt("proxies_grid_scroll")
         .auto_shrink([false; 2])
         .show(ui, |ui| {
-            let gap = 12.0_f32;
-            ui.spacing_mut().item_spacing = egui::vec2(gap, gap);
-            let avail = ui.available_width();
-            let cols = ((avail + gap) / (min_col_w + gap)).floor().clamp(2.0, 12.0) as usize;
-            let card_w = (avail - gap * (cols as f32 - 1.0)) / cols as f32;
+            egui::Frame::none()
+                .inner_margin(egui::Margin::symmetric(6.0, 6.0))
+                .show(ui, |ui| {
+                    let gap = 12.0_f32;
+                    ui.spacing_mut().item_spacing = egui::vec2(gap, gap);
+                    let avail = ui.available_width();
+                    let cols = ((avail + gap) / (min_col_w + gap)).floor().clamp(2.0, 12.0) as usize;
+                    let card_w = (avail - gap * (cols as f32 - 1.0)) / cols as f32;
 
-            for row in filtered_nodes.chunks(cols) {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = gap;
-                    for node in row {
-                        let (rect, resp) =
-                            ui.allocate_exact_size(egui::vec2(card_w, card_h), egui::Sense::click());
-                        if resp.hovered() {
-                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                        }
-                        if scroll_to_sel && node.is_selected {
-                            ui.scroll_to_rect(rect, Some(egui::Align::Center));
-                        }
+                    for row in filtered_nodes.chunks(cols) {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = gap;
+                            for node in row {
+                                let (rect, resp) = ui.allocate_exact_size(
+                                    egui::vec2(card_w, card_h),
+                                    egui::Sense::click(),
+                                );
+                                if resp.hovered() {
+                                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                }
+                                if scroll_to_sel && node.is_selected {
+                                    ui.scroll_to_rect(rect, Some(egui::Align::Center));
+                                }
 
-                        let is_sel = node.is_selected;
-                        let card_scale = interact_spring_scale(
-                            ctx,
-                            resp.id,
-                            resp.is_pointer_button_down_on(),
-                            resp.hovered(),
-                        );
-                        let sel_t =
-                            ctx.animate_bool_with_time(resp.id.with("card_sel"), is_sel, 0.22);
-                        let draw_rect = scale_rect(rect, card_scale);
+                                let is_sel = node.is_selected;
+                                let card_scale = interact_spring_scale(
+                                    ctx,
+                                    resp.id,
+                                    resp.is_pointer_button_down_on(),
+                                    resp.hovered(),
+                                );
+                                let sel_t = ctx.animate_bool_with_time(
+                                    resp.id.with("card_sel"),
+                                    is_sel,
+                                    0.22,
+                                );
+                                let draw_rect = scale_rect(rect, card_scale);
 
-                        let fill = if resp.hovered() {
-                            pal.bg_card_hover
-                        } else {
-                            pal.bg_card
-                        };
+                                let fill = if resp.hovered() {
+                                    pal.bg_card_hover
+                                } else {
+                                    pal.bg_card
+                                };
 
-                        let painter = ui.painter();
-                        draw_bento_card(&painter, draw_rect, 11.0, fill, pal);
+                                let painter = ui.painter();
+                                draw_bento_card(&painter, draw_rect, 11.0, fill, pal);
 
-                        // --- Row 1: Optional Flag Icon + Node Name + Selected Blue Checkmark Circle `(✓)` ---
-                        let badge_code = if node.flag.is_empty() {
-                            match_flag(&node.name)
-                        } else {
-                            node.flag.as_str()
-                        };
-                        let has_flag = !matches!(badge_code, "DIR" | "AUTO" | "FAIL" | "NET");
+                                // --- Row 1: Optional Flag Icon + Node Name + Selected Blue Checkmark Circle `(✓)` ---
+                                let badge_code = if node.flag.is_empty() {
+                                    match_flag(&node.name)
+                                } else {
+                                    node.flag.as_str()
+                                };
+                                let has_flag =
+                                    !matches!(badge_code, "DIR" | "AUTO" | "FAIL" | "NET");
 
-                        let top_y = draw_rect.top() + card_h * 0.33;
-                        let title_x = if has_flag {
-                            let flag_rect = egui::Rect::from_center_size(
-                                egui::pos2(draw_rect.left() + 18.0, top_y),
-                                egui::vec2(14.0, 10.0),
-                            );
-                            draw_flag_icon(&painter, flag_rect, badge_code, pal);
-                            29.0
-                        } else {
-                            11.0
-                        };
+                                let top_y = draw_rect.top() + card_h * 0.33;
+                                let title_x = if has_flag {
+                                    let flag_rect = egui::Rect::from_center_size(
+                                        egui::pos2(draw_rect.left() + 18.0, top_y),
+                                        egui::vec2(14.0, 10.0),
+                                    );
+                                    draw_flag_icon(&painter, flag_rect, badge_code, pal);
+                                    29.0
+                                } else {
+                                    11.0
+                                };
 
-                        // Selected Blue Circle Checkmark on Top-Right
-                        let right_pad = if sel_t > 0.01 {
-                            let chk_r = (8.0 * spring_overshoot(sel_t)).clamp(0.0, 9.2);
-                            let chk_center = egui::pos2(draw_rect.right() - 16.0, top_y);
-                            painter.circle_filled(chk_center, chk_r, pal.primary);
-                            draw_sf_checkmark(
-                                &painter,
-                                chk_center,
-                                (chk_r / 8.0) * 0.68,
-                                egui::Color32::WHITE,
-                            );
-                            28.0
-                        } else {
-                            10.0
-                        };
+                                // Selected Blue Circle Checkmark on Top-Right
+                                let right_pad = if sel_t > 0.01 {
+                                    let chk_r = (8.0 * spring_overshoot(sel_t)).clamp(0.0, 9.2);
+                                    let chk_center = egui::pos2(draw_rect.right() - 16.0, top_y);
+                                    painter.circle_filled(chk_center, chk_r, pal.primary);
+                                    draw_sf_checkmark(
+                                        &painter,
+                                        chk_center,
+                                        (chk_r / 8.0) * 0.68,
+                                        egui::Color32::WHITE,
+                                    );
+                                    28.0
+                                } else {
+                                    10.0
+                                };
 
-                        let display_title = format_cupertino_title(&node.name);
-                        let mut job = egui::text::LayoutJob::single_section(
-                            display_title,
-                            egui::TextFormat {
-                                font_id: cup_font_reg(12.0),
-                                color: pal.text_primary,
-                                ..Default::default()
-                            },
-                        );
-                        job.wrap = egui::text::TextWrapping {
-                            max_width: (draw_rect.width() - title_x - right_pad).max(16.0),
-                            max_rows: 1,
-                            break_anywhere: true,
-                            overflow_character: Some('…'),
-                        };
-                        let galley = ui.fonts(|f| f.layout_job(job));
-                        painter.galley(
-                            egui::pos2(
-                                draw_rect.left() + title_x,
-                                top_y - galley.size().y * 0.5,
-                            ),
-                            galley,
-                            pal.text_primary,
-                        );
+                                let display_title = format_cupertino_title(&node.name);
+                                let mut job = egui::text::LayoutJob::single_section(
+                                    display_title,
+                                    egui::TextFormat {
+                                        font_id: cup_font_reg(12.0),
+                                        color: pal.text_primary,
+                                        ..Default::default()
+                                    },
+                                );
+                                job.wrap = egui::text::TextWrapping {
+                                    max_width: (draw_rect.width() - title_x - right_pad).max(16.0),
+                                    max_rows: 1,
+                                    break_anywhere: true,
+                                    overflow_character: Some('…'),
+                                };
+                                let galley = ui.fonts(|f| f.layout_job(job));
+                                painter.galley(
+                                    egui::pos2(
+                                        draw_rect.left() + title_x,
+                                        top_y - galley.size().y * 0.5,
+                                    ),
+                                    galley,
+                                    pal.text_primary,
+                                );
 
-                        // --- Row 2: Protocol Type (`Vless` / `Direct` / `URLTest`) on Left + Delay (`77 ms` / `超时`) on Right ---
-                        let bottom_y = draw_rect.bottom() - card_h * 0.27;
-                        painter.text(
-                            egui::pos2(draw_rect.left() + 11.0, bottom_y),
-                            egui::Align2::LEFT_CENTER,
-                            &node.proto,
-                            cup_font_reg(10.5),
-                            pal.text_tertiary,
-                        );
+                                // --- Row 2: Protocol Type (`Vless` / `Direct` / `URLTest`) on Left + Delay (`77 ms` / `超时`) on Right ---
+                                let bottom_y = draw_rect.bottom() - card_h * 0.27;
+                                painter.text(
+                                    egui::pos2(draw_rect.left() + 11.0, bottom_y),
+                                    egui::Align2::LEFT_CENTER,
+                                    &node.proto,
+                                    cup_font_reg(10.5),
+                                    pal.text_tertiary,
+                                );
 
-                        let (dtxt, delay_col) = if node.delay > 0 {
-                            let c = if node.delay < 260 {
-                                pal.green
-                            } else if node.delay < 500 {
-                                pal.orange
-                            } else {
-                                pal.red
-                            };
-                            (format!("{} ms", node.delay), c)
-                        } else if node.delay == 0 {
-                            ("超时".to_string(), pal.red)
-                        } else {
-                            ("".to_string(), pal.text_tertiary)
-                        };
+                                let (dtxt, delay_col) = if node.delay > 0 {
+                                    let c = if node.delay < 260 {
+                                        pal.green
+                                    } else if node.delay < 500 {
+                                        pal.orange
+                                    } else {
+                                        pal.red
+                                    };
+                                    (format!("{} ms", node.delay), c)
+                                } else if node.delay == 0 {
+                                    ("超时".to_string(), pal.red)
+                                } else {
+                                    ("".to_string(), pal.text_tertiary)
+                                };
 
-                        if !dtxt.is_empty() {
-                            painter.text(
-                                egui::pos2(draw_rect.right() - 11.0, bottom_y),
-                                egui::Align2::RIGHT_CENTER,
-                                dtxt,
-                                cup_font_med(10.5),
-                                delay_col,
-                            );
-                        }
+                                if !dtxt.is_empty() {
+                                    painter.text(
+                                        egui::pos2(draw_rect.right() - 11.0, bottom_y),
+                                        egui::Align2::RIGHT_CENTER,
+                                        dtxt,
+                                        cup_font_med(10.5),
+                                        delay_col,
+                                    );
+                                }
 
-                        if !is_sel && resp.clicked() {
-                            *action_select_node = Some(node.name.clone());
-                            app.open_popup = None;
-                            app.more_submenu = None;
-                        }
+                                if !is_sel && resp.clicked() {
+                                    *action_select_node = Some(node.name.clone());
+                                    app.open_popup = None;
+                                    app.more_submenu = None;
+                                }
+                            }
+                        });
                     }
                 });
-            }
         });
 }
 

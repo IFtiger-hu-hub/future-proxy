@@ -67,7 +67,10 @@ pub fn render_profiles_tab(
         .id_salt("profiles_list_scroll")
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            for sub in subs {
+            egui::Frame::none()
+                .inner_margin(egui::Margin::symmetric(6.0, 6.0))
+                .show(ui, |ui| {
+                    for sub in subs {
                 let is_act = sub.id == active_id;
                 let (c_rect, c_resp) = ui.allocate_exact_size(
                     egui::vec2(ui.available_width(), 112.0),
@@ -300,6 +303,7 @@ pub fn render_profiles_tab(
                 }
                 ui.add_space(12.0);
             }
+                });
         });
 }
 
@@ -498,6 +502,9 @@ pub fn render_tools_tab(
         .id_salt("tools_list_scroll")
         .auto_shrink([false, false])
         .show(ui, |ui| {
+            egui::Frame::none()
+                .inner_margin(egui::Margin::symmetric(6.0, 6.0))
+                .show(ui, |ui| {
             // 内存监控与闲置回收卡片
             {
                 let (m_rect, _) = ui.allocate_exact_size(
@@ -673,5 +680,6 @@ pub fn render_tools_tab(
                     }
                 }
             }
+                });
         });
 }

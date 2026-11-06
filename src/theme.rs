@@ -228,7 +228,7 @@ pub fn apply_app_theme(ctx: &egui::Context, pal: &ThemePalette) {
     ctx.set_style(style);
 }
 
-/// 4 层同心柔化投影 + 纯白圆角卡片绘制（模拟 FlClash 的 BoxShadow(blurRadius: 14) 悬浮质感）
+/// 高斯柔化投影 + 圆角卡片绘制（使用 epaint 原生顶点渐变模糊阴影 + 多层环境光漫反射）
 pub fn draw_bento_card(
     painter: &egui::Painter,
     rect: egui::Rect,
@@ -237,44 +237,51 @@ pub fn draw_bento_card(
     pal: &ThemePalette,
 ) {
     if !pal.dark {
-        // 4 层渐进透明度阴影，模拟高斯漫反射效果
-        painter.rect_filled(
-            rect.translate(egui::vec2(0.0, 3.5)).expand(4.0),
-            rounding + 4.0,
-            egui::Color32::from_rgba_unmultiplied(15, 23, 42, 3),
-        );
-        painter.rect_filled(
-            rect.translate(egui::vec2(0.0, 2.5)).expand(2.2),
-            rounding + 2.2,
-            egui::Color32::from_rgba_unmultiplied(15, 23, 42, 5),
-        );
-        painter.rect_filled(
-            rect.translate(egui::vec2(0.0, 1.5)).expand(1.0),
-            rounding + 1.0,
-            egui::Color32::from_rgba_unmultiplied(15, 23, 42, 7),
-        );
-        painter.rect_filled(
-            rect.translate(egui::vec2(0.0, 0.8)).expand(0.2),
-            rounding + 0.2,
-            egui::Color32::from_rgba_unmultiplied(15, 23, 42, 9),
-        );
+        // 远景大范围柔化漫反射主阴影
+        let main_shadow = egui::epaint::Shadow {
+            offset: egui::vec2(0.0, 5.0),
+            blur: 18.0,
+            spread: 1.5,
+            color: egui::Color32::from_rgba_unmultiplied(15, 23, 42, 24),
+        };
+        painter.add(main_shadow.as_shape(rect, rounding));
+
+        // 近景接触阴影，增强卡片边缘立体悬浮感
+        let contact_shadow = egui::epaint::Shadow {
+            offset: egui::vec2(0.0, 2.0),
+            blur: 6.0,
+            spread: 0.0,
+            color: egui::Color32::from_rgba_unmultiplied(15, 23, 42, 14),
+        };
+        painter.add(contact_shadow.as_shape(rect, rounding));
     } else {
-        painter.rect_filled(
-            rect.translate(egui::vec2(0.0, 2.5)).expand(1.5),
-            rounding + 1.5,
-            egui::Color32::from_rgba_unmultiplied(0, 0, 0, 55),
-        );
+        // 深色模式下的深邃立体投影
+        let dark_shadow = egui::epaint::Shadow {
+            offset: egui::vec2(0.0, 6.0),
+            blur: 22.0,
+            spread: 2.0,
+            color: egui::Color32::from_rgba_unmultiplied(0, 0, 0, 120),
+        };
+        painter.add(dark_shadow.as_shape(rect, rounding));
+
+        let dark_contact = egui::epaint::Shadow {
+            offset: egui::vec2(0.0, 2.0),
+            blur: 6.0,
+            spread: 0.5,
+            color: egui::Color32::from_rgba_unmultiplied(0, 0, 0, 75),
+        };
+        painter.add(dark_contact.as_shape(rect, rounding));
     }
     painter.rect(
         rect,
         rounding,
         fill,
         egui::Stroke::new(
-            0.75_f32,
+            0.85_f32,
             if pal.dark {
-                pal.border
+                egui::Color32::from_rgba_unmultiplied(56, 64, 82, 210)
             } else {
-                egui::Color32::from_rgba_unmultiplied(226, 232, 240, 175)
+                egui::Color32::from_rgba_unmultiplied(220, 228, 240, 195)
             },
         ),
     );
@@ -287,10 +294,11 @@ pub fn draw_status_wave_decor(
     primary: egui::Color32,
     dark: bool,
 ) {
-    // 缩小裁剪区域并在四角避开 14px 圆角外缘，使用原生抗锯齿圆环叠加以获得丝滑边缘
+    // 缩小裁剪区域并在四角避开圆角外缘，使用原生抗锯齿圆环叠加以获得丝滑边缘，并随卡片高度自适应缩放
     let inner_clip = card_rect.shrink(1.2);
     let clipped = painter.with_clip_rect(inner_clip);
-    let anchor = egui::pos2(card_rect.right() - 42.0, card_rect.center().y + 4.0);
+    let sc = (card_rect.height() / 138.0).clamp(0.95, 1.45);
+    let anchor = egui::pos2(card_rect.right() - 42.0 * sc, card_rect.center().y + 4.0 * sc);
 
     let c_outer = if dark {
         egui::Color32::from_rgba_unmultiplied(primary.r(), primary.g(), primary.b(), 18)
@@ -303,8 +311,8 @@ pub fn draw_status_wave_decor(
         egui::Color32::from_rgba_unmultiplied(primary.r(), primary.g(), primary.b(), 22)
     };
 
-    clipped.circle_filled(anchor + egui::vec2(14.0, -6.0), 88.0, c_outer);
-    clipped.circle_filled(anchor + egui::vec2(6.0, 4.0), 56.0, c_mid);
+    clipped.circle_filled(anchor + egui::vec2(14.0 * sc, -6.0 * sc), 88.0 * sc, c_outer);
+    clipped.circle_filled(anchor + egui::vec2(6.0 * sc, 4.0 * sc), 56.0 * sc, c_mid);
 }
 
 /// 现代极简双层光晕启停主按钮（采用 egui 原生 SDF 抗锯齿圆与矢量图标，彻底消除多边形锯齿与抠图毛边感）
@@ -334,22 +342,23 @@ pub fn draw_scalloped_flower_button(
     );
 
     // 4. 中心高对比矢量图标：运行中显示圆角双竖线暂停 `II`，未开启显示播放三角 `▶`
+    let k = (base_r / 22.5).clamp(0.85, 1.5);
     if is_running {
-        let bar_w = 3.0_f32;
-        let bar_h = 12.0_f32;
-        let gap = 3.6_f32;
+        let bar_w = 3.0_f32 * k;
+        let bar_h = 12.0_f32 * k;
+        let gap = 3.6_f32 * k;
         for dx in [-gap, gap] {
             let r = egui::Rect::from_center_size(
                 center + egui::vec2(dx, 0.0),
                 egui::vec2(bar_w, bar_h),
             );
-            painter.rect_filled(r, 1.5, egui::Color32::WHITE);
+            painter.rect_filled(r, 1.5 * k, egui::Color32::WHITE);
         }
     } else {
         let tri = vec![
-            center + egui::vec2(-3.2, -5.8),
-            center + egui::vec2(-3.2, 5.8),
-            center + egui::vec2(6.0, 0.0),
+            center + egui::vec2(-3.2 * k, -5.8 * k),
+            center + egui::vec2(-3.2 * k, 5.8 * k),
+            center + egui::vec2(6.0 * k, 0.0),
         ];
         painter.add(egui::Shape::convex_polygon(
             tri,
