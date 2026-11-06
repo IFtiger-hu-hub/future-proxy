@@ -860,6 +860,18 @@ pub mod win_os {
         }
     }
 
+    /// 排空当前线程（主线程）的 Win32 消息队列，确保 winit 窗口 Drop 时投递的
+    /// `DESTROY_MSG_ID` 被 `window_proc` 立即处理并调用 `DestroyWindow(hwnd)`。
+    pub fn pump_thread_messages() {
+        unsafe {
+            let mut msg: MSG = std::mem::zeroed();
+            while PeekMessageW(&mut msg, 0, 0, 0, PM_REMOVE) != 0 {
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+        }
+    }
+
     pub fn pick_yaml_file_dialog() -> Option<PathBuf> {
         unsafe {
             let filter: Vec<u16> =

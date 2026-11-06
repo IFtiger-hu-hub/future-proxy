@@ -44,6 +44,84 @@ pub fn render_dashboard_tab(
                 let (t_rect, _) = ui.allocate_exact_size(title_g.size(), egui::Sense::hover());
                 ui.painter().galley(t_rect.min, title_g, pal.text_primary);
 
+                // --- 测速进度 / 测速完成状态胶囊反馈 ---
+                let show_done_pill = !app.is_probing_status
+                    && !app.is_testing_delay
+                    && app
+                        .last_ping_done_at
+                        .map(|t| t.elapsed().as_secs_f32() < 5.5)
+                        .unwrap_or(false);
+                if app.is_probing_status || app.is_testing_delay || show_done_pill {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(80));
+                    ui.add_space(10.0);
+                    let is_err = !app.is_probing_status
+                        && !app.is_testing_delay
+                        && app.status_msg.starts_with('✗');
+                    let pill_txt = if app.is_probing_status {
+                        "⚡ 正在检测节点延迟与连通状态…".to_string()
+                    } else if app.is_testing_delay {
+                        format!(
+                            "⚡ 正在测速 ({} / {})…",
+                            app.ping_done,
+                            app.ping_total.max(app.nodes.len()).max(1)
+                        )
+                    } else {
+                        app.status_msg.clone()
+                    };
+                    let (bg_col, fg_col, stroke_col) =
+                        if app.is_probing_status || app.is_testing_delay {
+                            (
+                                pal.bg_selected,
+                                pal.primary,
+                                egui::Color32::from_rgba_unmultiplied(
+                                    pal.primary.r(),
+                                    pal.primary.g(),
+                                    pal.primary.b(),
+                                    110,
+                                ),
+                            )
+                        } else if is_err {
+                            (
+                                egui::Color32::from_rgba_unmultiplied(239, 68, 68, 28),
+                                pal.red,
+                                egui::Color32::from_rgba_unmultiplied(239, 68, 68, 110),
+                            )
+                        } else {
+                            (
+                                if pal.dark {
+                                    egui::Color32::from_rgba_unmultiplied(34, 197, 94, 36)
+                                } else {
+                                    egui::Color32::from_rgb(220, 252, 231)
+                                },
+                                if pal.dark {
+                                    egui::Color32::from_rgb(74, 222, 128)
+                                } else {
+                                    egui::Color32::from_rgb(21, 128, 61)
+                                },
+                                egui::Color32::from_rgba_unmultiplied(34, 197, 94, 110),
+                            )
+                        };
+                    let pg =
+                        ui.fonts(|f| f.layout_no_wrap(pill_txt.clone(), cup_font_med(11.5), fg_col));
+                    let pw = (pg.size().x + 24.0).clamp(110.0, 340.0);
+                    let (p_rect, _) =
+                        ui.allocate_exact_size(egui::vec2(pw, 26.0), egui::Sense::hover());
+                    let pp = ui.painter();
+                    pp.rect(
+                        p_rect,
+                        13.0,
+                        bg_col,
+                        egui::Stroke::new(0.9_f32, stroke_col),
+                    );
+                    pp.text(
+                        p_rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        pill_txt,
+                        cup_font_med(11.5),
+                        fg_col,
+                    );
+                }
+
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let (btn_rect, btn_resp) =
                         ui.allocate_exact_size(egui::vec2(100.0, 32.0), egui::Sense::click());
@@ -428,8 +506,16 @@ fn draw_status_card(
         }
     }
 
+    let just_finished_probe = !app.is_probing_status
+        && !app.is_testing_delay
+        && app
+            .last_ping_done_at
+            .map(|t| t.elapsed().as_secs_f32() < 3.5)
+            .unwrap_or(false);
     let test_lbl = if app.is_probing_status || app.is_testing_delay {
-        "↻ 检测中…"
+        "↻ 正在测速…"
+    } else if just_finished_probe {
+        "✓ 测速完成"
     } else {
         "↻ 测试节点"
     };
@@ -464,15 +550,19 @@ fn draw_status_card(
     sp.rect(
         t1_draw,
         tag_h * 0.5,
-        if tag1_resp.hovered() {
+        if app.is_probing_status || app.is_testing_delay {
+            pal.bg_selected
+        } else if tag1_resp.hovered() {
             pal.surface_hover
         } else {
             pal.surface_container
         },
         egui::Stroke::new(
             0.8_f32,
-            if tag1_resp.hovered() {
+            if tag1_resp.hovered() || app.is_probing_status || app.is_testing_delay {
                 pal.primary
+            } else if just_finished_probe {
+                pal.green
             } else {
                 pal.border
             },
@@ -483,8 +573,10 @@ fn draw_status_card(
         egui::Align2::CENTER_CENTER,
         test_lbl,
         cup_font_med(10.0 * s),
-        if tag1_resp.hovered() || app.is_probing_status {
+        if tag1_resp.hovered() || app.is_probing_status || app.is_testing_delay {
             pal.primary
+        } else if just_finished_probe {
+            pal.green
         } else {
             pal.text_secondary
         },
@@ -1122,17 +1214,26 @@ fn draw_service_status_card(
         cup_font_med(11.5 * s),
         pal.text_secondary,
     );
+    let just_done = !app.is_probing_status
+        && app
+            .last_ping_done_at
+            .map(|t| t.elapsed().as_secs_f32() < 3.5)
+            .unwrap_or(false);
     svp.text(
         egui::pos2(sv_rect.right() - pad, hdr_y),
         egui::Align2::RIGHT_CENTER,
         if app.is_probing_status {
-            "测速中…"
+            "↻ 正在测速…"
+        } else if just_done {
+            "✓ 测速完成"
         } else {
             "点击测速 ›"
         },
-        cup_font_reg(10.0 * s),
+        cup_font_med(10.0 * s),
         if app.is_probing_status {
             pal.primary
+        } else if just_done {
+            pal.green
         } else {
             pal.text_muted
         },
@@ -1208,7 +1309,7 @@ fn draw_service_status_card(
             pal.text_primary,
         );
         let (d_str, d_col) = if app.is_probing_status {
-            ("…".to_string(), pal.primary)
+            ("测速中…".to_string(), pal.primary)
         } else if *delay_val > 0 {
             let c = if *delay_val < 220 {
                 pal.green

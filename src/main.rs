@@ -508,16 +508,27 @@ impl FutureProxyApp {
     fn ping_all(&self) {
         let names = {
             let mut app = self.state.lock().unwrap();
+            if app.is_testing_delay {
+                return;
+            }
+            let total = app.nodes.len();
             app.is_testing_delay = true;
+            app.ping_done = 0;
+            app.ping_total = total;
+            app.last_ping_done_at = None;
+            app.status_msg = format!("⚡ 正在测速 (0 / {})…", total);
             for n in &mut app.nodes {
                 n.delay = -1;
             }
             app.nodes.iter().map(|n| n.name.clone()).collect::<Vec<_>>()
         };
+        self.ctx.request_repaint();
         let state = Arc::clone(&self.state);
         let ctx = self.ctx.clone();
         std::thread::spawn(move || {
-            for chunk in names.chunks(16) {
+            let started = Instant::now();
+            let total = names.len();
+            for chunk in names.chunks(8) {
                 let results = test_delays(chunk);
                 let mut app = state.lock().unwrap();
                 for n in &mut app.nodes {
@@ -525,11 +536,18 @@ impl FutureProxyApp {
                         n.delay = *d;
                     }
                 }
+                app.ping_done = (app.ping_done + chunk.len()).min(total);
+                app.status_msg = format!("⚡ 正在测速 ({} / {})…", app.ping_done, total);
                 drop(app);
                 ctx.request_repaint();
             }
+            let elapsed = started.elapsed();
+            if elapsed < Duration::from_millis(320) {
+                std::thread::sleep(Duration::from_millis(320) - elapsed);
+            }
             let mut app = state.lock().unwrap();
             app.is_testing_delay = false;
+            app.last_ping_done_at = Some(Instant::now());
             if let Some(best_d) = app
                 .nodes
                 .iter()
@@ -540,7 +558,21 @@ impl FutureProxyApp {
                 app.resolved_delay = best_d;
             }
             let ok_cnt = app.nodes.iter().filter(|n| n.delay > 0).count();
-            app.status_msg = format!("✓ 测速完成（{} / {} 节点可用）", ok_cnt, app.nodes.len());
+            let min_d = app
+                .nodes
+                .iter()
+                .map(|n| n.delay)
+                .filter(|&d| d > 0)
+                .min();
+            app.status_msg = match min_d {
+                Some(fastest) => format!(
+                    "✓ 测速完成：{} / {} 节点可用 · 最快 {} ms",
+                    ok_cnt,
+                    app.nodes.len(),
+                    fastest
+                ),
+                None => format!("✗ 测速结束：0 / {} 节点可用（连接超时）", app.nodes.len()),
+            };
             drop(app);
             ctx.request_repaint();
         });
@@ -554,6 +586,7 @@ impl FutureProxyApp {
                 return;
             }
             app.is_probing_status = true;
+            app.last_ping_done_at = None;
             let t = if !app.resolved_node.is_empty() {
                 app.resolved_node.clone()
             } else if !app.current_selected.is_empty() {
@@ -561,12 +594,14 @@ impl FutureProxyApp {
             } else {
                 "GLOBAL".to_string()
             };
-            app.status_msg = format!("正在检测节点 [{}] 状态...", format_cupertino_title(&t));
+            app.status_msg = format!("⚡ 正在检测节点 [{}] 延迟与连通性…", format_cupertino_title(&t));
             t
         };
+        self.ctx.request_repaint();
         let state = Arc::clone(&self.state);
         let ctx = self.ctx.clone();
         std::thread::spawn(move || {
+            let started = Instant::now();
             let t1 = target.clone();
             let t2 = target.clone();
             let h1 = std::thread::spawn(move || {
@@ -577,6 +612,10 @@ impl FutureProxyApp {
             });
             let g_ms = h1.join().unwrap_or(0);
             let cf_ms = h2.join().unwrap_or(0);
+            let elapsed = started.elapsed();
+            if elapsed < Duration::from_millis(360) {
+                std::thread::sleep(Duration::from_millis(360) - elapsed);
+            }
             let best = match (g_ms > 0, cf_ms > 0) {
                 (true, true) => g_ms.min(cf_ms),
                 (true, false) => g_ms,
@@ -585,6 +624,7 @@ impl FutureProxyApp {
             };
             let mut app = state.lock().unwrap();
             app.is_probing_status = false;
+            app.last_ping_done_at = Some(Instant::now());
             app.probe_google_ms = g_ms;
             app.probe_cf_ms = cf_ms;
             app.resolved_delay = best;
@@ -596,13 +636,13 @@ impl FutureProxyApp {
             }
             app.status_msg = if best > 0 {
                 format!(
-                    "✓ 节点状态正常：Google {} ms · Cloudflare {} ms",
+                    "✓ 测速完成：Google {} ms · Cloudflare {} ms",
                     if g_ms > 0 { g_ms } else { best },
                     if cf_ms > 0 { cf_ms } else { best }
                 )
             } else {
                 format!(
-                    "✗ 节点 [{}] 连接超时，建议切换其他节点",
+                    "✗ 测速结束：节点 [{}] 连接超时",
                     format_cupertino_title(&target)
                 )
             };
@@ -861,10 +901,14 @@ impl FutureProxyApp {
 
 impl eframe::App for FutureProxyApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if ctx.input(|i| i.viewport().close_requested()) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        }
         if self.tray_flags.quit.load(Ordering::SeqCst) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
         if self.tray_flags.show.swap(false, Ordering::SeqCst) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
         }
 
@@ -1670,10 +1714,17 @@ fn main() -> eframe::Result<()> {
 
         #[cfg(windows)]
         {
+            // winit 在 Drop 窗口时通过 PostMessageW 投递 DESTROY_MSG_ID 到主线程消息队列，
+            // 必须立即 pump 消息队列以触发 window_proc 调用 DestroyWindow(hwnd) 彻底销毁窗口。
+            for _ in 0..5 {
+                crate::platform::win_os::pump_thread_messages();
+                std::thread::sleep(Duration::from_millis(10));
+            }
             crate::platform::win_os::trim_working_set();
             let guard = rt._wake_mutex.lock().unwrap();
             let mut guard = guard;
             loop {
+                crate::platform::win_os::pump_thread_messages();
                 if rt.tray_flags.quit.load(Ordering::SeqCst) {
                     break;
                 }
@@ -1682,7 +1733,7 @@ fn main() -> eframe::Result<()> {
                 }
                 let (g, _) = rt
                     ._wake
-                    .wait_timeout(guard, Duration::from_millis(500))
+                    .wait_timeout(guard, Duration::from_millis(50))
                     .unwrap();
                 guard = g;
             }
