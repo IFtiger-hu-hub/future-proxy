@@ -44,20 +44,25 @@ pub fn render_dashboard_tab(
                 let (t_rect, _) = ui.allocate_exact_size(title_g.size(), egui::Sense::hover());
                 ui.painter().galley(t_rect.min, title_g, pal.text_primary);
 
-                // --- 测速进度 / 测速完成状态胶囊反馈 ---
-                let show_done_pill = !app.is_probing_status
-                    && !app.is_testing_delay
-                    && app
+                // --- 测速 / 重启内核 / 系统操作状态胶囊反馈 ---
+                let is_busy_pill =
+                    app.is_probing_status || app.is_testing_delay || app.is_restarting_core;
+                let show_done_pill = !is_busy_pill
+                    && (app
                         .last_ping_done_at
                         .map(|t| t.elapsed().as_secs_f32() < 5.5)
-                        .unwrap_or(false);
-                if app.is_probing_status || app.is_testing_delay || show_done_pill {
+                        .unwrap_or(false)
+                        || app
+                            .last_action_done_at
+                            .map(|t| t.elapsed().as_secs_f32() < 5.0)
+                            .unwrap_or(false));
+                if is_busy_pill || show_done_pill {
                     ctx.request_repaint_after(std::time::Duration::from_millis(80));
                     ui.add_space(10.0);
-                    let is_err = !app.is_probing_status
-                        && !app.is_testing_delay
-                        && app.status_msg.starts_with('✗');
-                    let pill_txt = if app.is_probing_status {
+                    let is_err = !is_busy_pill && app.status_msg.starts_with('✗');
+                    let pill_txt = if app.is_restarting_core {
+                        "↻ 正在重启 Mihomo 内核并重载配置…".to_string()
+                    } else if app.is_probing_status {
                         "⚡ 正在检测节点延迟与连通状态…".to_string()
                     } else if app.is_testing_delay {
                         format!(
@@ -68,42 +73,41 @@ pub fn render_dashboard_tab(
                     } else {
                         app.status_msg.clone()
                     };
-                    let (bg_col, fg_col, stroke_col) =
-                        if app.is_probing_status || app.is_testing_delay {
-                            (
-                                pal.bg_selected,
-                                pal.primary,
-                                egui::Color32::from_rgba_unmultiplied(
-                                    pal.primary.r(),
-                                    pal.primary.g(),
-                                    pal.primary.b(),
-                                    110,
-                                ),
-                            )
-                        } else if is_err {
-                            (
-                                egui::Color32::from_rgba_unmultiplied(239, 68, 68, 28),
-                                pal.red,
-                                egui::Color32::from_rgba_unmultiplied(239, 68, 68, 110),
-                            )
-                        } else {
-                            (
-                                if pal.dark {
-                                    egui::Color32::from_rgba_unmultiplied(34, 197, 94, 36)
-                                } else {
-                                    egui::Color32::from_rgb(220, 252, 231)
-                                },
-                                if pal.dark {
-                                    egui::Color32::from_rgb(74, 222, 128)
-                                } else {
-                                    egui::Color32::from_rgb(21, 128, 61)
-                                },
-                                egui::Color32::from_rgba_unmultiplied(34, 197, 94, 110),
-                            )
-                        };
+                    let (bg_col, fg_col, stroke_col) = if is_busy_pill {
+                        (
+                            pal.bg_selected,
+                            pal.primary,
+                            egui::Color32::from_rgba_unmultiplied(
+                                pal.primary.r(),
+                                pal.primary.g(),
+                                pal.primary.b(),
+                                110,
+                            ),
+                        )
+                    } else if is_err {
+                        (
+                            egui::Color32::from_rgba_unmultiplied(239, 68, 68, 28),
+                            pal.red,
+                            egui::Color32::from_rgba_unmultiplied(239, 68, 68, 110),
+                        )
+                    } else {
+                        (
+                            if pal.dark {
+                                egui::Color32::from_rgba_unmultiplied(34, 197, 94, 36)
+                            } else {
+                                egui::Color32::from_rgb(220, 252, 231)
+                            },
+                            if pal.dark {
+                                egui::Color32::from_rgb(74, 222, 128)
+                            } else {
+                                egui::Color32::from_rgb(21, 128, 61)
+                            },
+                            egui::Color32::from_rgba_unmultiplied(34, 197, 94, 110),
+                        )
+                    };
                     let pg =
                         ui.fonts(|f| f.layout_no_wrap(pill_txt.clone(), cup_font_med(11.5), fg_col));
-                    let pw = (pg.size().x + 24.0).clamp(110.0, 340.0);
+                    let pw = (pg.size().x + 24.0).clamp(110.0, 360.0);
                     let (p_rect, _) =
                         ui.allocate_exact_size(egui::vec2(pw, 26.0), egui::Sense::hover());
                     let pp = ui.painter();
@@ -123,8 +127,14 @@ pub fn render_dashboard_tab(
                 }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let just_restarted = !app.is_restarting_core
+                        && app
+                            .last_action_done_at
+                            .map(|t| t.elapsed().as_secs_f32() < 3.5)
+                            .unwrap_or(false)
+                        && app.status_msg.contains("内核重启");
                     let (btn_rect, btn_resp) =
-                        ui.allocate_exact_size(egui::vec2(100.0, 32.0), egui::Sense::click());
+                        ui.allocate_exact_size(egui::vec2(104.0, 32.0), egui::Sense::click());
                     if btn_resp.hovered() {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                     }
@@ -136,14 +146,32 @@ pub fn render_dashboard_tab(
                     );
                     let br = scale_rect(btn_rect, b_scale);
                     let bp = ui.painter().clone();
-                    let fill = if btn_resp.hovered() {
+                    let fill = if app.is_restarting_core {
+                        pal.bg_selected
+                    } else if btn_resp.hovered() {
                         pal.bg_card_hover
                     } else {
                         pal.bg_card
                     };
                     draw_bento_card(&bp, br, 16.0, fill, pal);
+                    if app.is_restarting_core || just_restarted {
+                        bp.rect_stroke(
+                            br,
+                            16.0,
+                            egui::Stroke::new(
+                                1.0_f32,
+                                if app.is_restarting_core {
+                                    pal.primary
+                                } else {
+                                    pal.green
+                                },
+                            ),
+                        );
+                    }
 
-                    let dot_col = if app.is_core_alive {
+                    let dot_col = if app.is_restarting_core {
+                        pal.orange
+                    } else if app.is_core_alive {
                         egui::Color32::from_rgb(34, 197, 94)
                     } else {
                         pal.red
@@ -154,17 +182,28 @@ pub fn render_dashboard_tab(
                         &bp,
                         CupIcon::Refresh,
                         egui::pos2(br.left() + 27.0, br.center().y),
-                        pal.primary,
+                        if just_restarted {
+                            pal.green
+                        } else {
+                            pal.primary
+                        },
                     );
+                    let (btn_lbl, lbl_col) = if app.is_restarting_core {
+                        ("重启中…", pal.primary)
+                    } else if just_restarted {
+                        ("已重启 ✓", pal.green)
+                    } else {
+                        ("重启内核", pal.text_primary)
+                    };
                     bp.text(
                         egui::pos2(br.left() + 38.0, br.center().y),
                         egui::Align2::LEFT_CENTER,
-                        "重启内核",
+                        btn_lbl,
                         cup_font_med(11.5),
-                        pal.text_primary,
+                        lbl_col,
                     );
 
-                    if btn_resp.clicked() {
+                    if btn_resp.clicked() && !app.is_restarting_core {
                         acts.restart_core = true;
                     }
                     if btn_resp.hovered() {
@@ -385,7 +424,19 @@ fn draw_status_card(
     let rnd = (14.0 * s).round();
     let pad_x = (16.0 * s).round();
     draw_bento_card(&sp, st_rect, rnd, pal.bg_card, pal);
-    draw_status_wave_decor(&sp, st_rect, pal.primary, pal.dark);
+    draw_status_wave_decor(&sp, st_rect, rnd, pal.primary, pal.dark);
+    sp.rect_stroke(
+        st_rect,
+        rnd,
+        egui::Stroke::new(
+            0.85_f32,
+            if pal.dark {
+                egui::Color32::from_rgba_unmultiplied(56, 64, 82, 210)
+            } else {
+                egui::Color32::from_rgba_unmultiplied(220, 228, 240, 195)
+            },
+        ),
+    );
 
     // 1. 顶部状态栏（按卡片高度比例定位）
     let top_y = st_rect.top() + height * 0.155;

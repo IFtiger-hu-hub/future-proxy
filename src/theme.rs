@@ -287,32 +287,97 @@ pub fn draw_bento_card(
     );
 }
 
-/// Dashboard 左上角 Status 卡片右侧的柔和光晕层叠装饰（100% 硬件抗锯齿圆弧，严格内缩不溢出圆角）
+/// 将任意点解析钳制在圆角矩形内部，用于裁剪与圆角矩形相交的凸图形（如状态卡片右侧同心圆光晕）
+#[inline]
+fn clamp_pos_to_rounded_rect(p: egui::Pos2, rect: egui::Rect, r: f32) -> egui::Pos2 {
+    let mut x = p.x.clamp(rect.left(), rect.right());
+    let mut y = p.y.clamp(rect.top(), rect.bottom());
+    let r = r.min(rect.width() * 0.5).min(rect.height() * 0.5).max(0.0);
+    if r <= 0.0 {
+        return egui::pos2(x, y);
+    }
+    let corners = [
+        (
+            x < rect.left() + r && y < rect.top() + r,
+            egui::pos2(rect.left() + r, rect.top() + r),
+        ),
+        (
+            x > rect.right() - r && y < rect.top() + r,
+            egui::pos2(rect.right() - r, rect.top() + r),
+        ),
+        (
+            x > rect.right() - r && y > rect.bottom() - r,
+            egui::pos2(rect.right() - r, rect.bottom() - r),
+        ),
+        (
+            x < rect.left() + r && y > rect.bottom() - r,
+            egui::pos2(rect.left() + r, rect.bottom() - r),
+        ),
+    ];
+    for (in_corner, c) in corners {
+        if in_corner {
+            let d = egui::vec2(x - c.x, y - c.y);
+            let len = d.length();
+            if len > r && len > 1e-4 {
+                x = c.x + (d.x / len) * r;
+                y = c.y + (d.y / len) * r;
+            }
+            break;
+        }
+    }
+    egui::pos2(x, y)
+}
+
+/// Dashboard 左上角 Status 卡片右侧的柔和光晕层叠装饰（严格沿圆角矩形边界解析裁剪，绝不溢出右上/右下圆角）
 pub fn draw_status_wave_decor(
     painter: &egui::Painter,
     card_rect: egui::Rect,
+    rounding: f32,
     primary: egui::Color32,
     dark: bool,
 ) {
-    // 缩小裁剪区域并在四角避开圆角外缘，使用原生抗锯齿圆环叠加以获得丝滑边缘，并随卡片高度自适应缩放
-    let inner_clip = card_rect.shrink(1.2);
-    let clipped = painter.with_clip_rect(inner_clip);
+    let inner_rect = card_rect.shrink(0.8);
+    let inner_rnd = (rounding - 0.8).max(2.0);
     let sc = (card_rect.height() / 138.0).clamp(0.95, 1.45);
     let anchor = egui::pos2(card_rect.right() - 42.0 * sc, card_rect.center().y + 4.0 * sc);
 
     let c_outer = if dark {
-        egui::Color32::from_rgba_unmultiplied(primary.r(), primary.g(), primary.b(), 18)
+        egui::Color32::from_rgba_unmultiplied(primary.r(), primary.g(), primary.b(), 20)
     } else {
         egui::Color32::from_rgba_unmultiplied(primary.r(), primary.g(), primary.b(), 14)
     };
     let c_mid = if dark {
-        egui::Color32::from_rgba_unmultiplied(primary.r(), primary.g(), primary.b(), 28)
+        egui::Color32::from_rgba_unmultiplied(primary.r(), primary.g(), primary.b(), 30)
     } else {
         egui::Color32::from_rgba_unmultiplied(primary.r(), primary.g(), primary.b(), 22)
     };
 
-    clipped.circle_filled(anchor + egui::vec2(14.0 * sc, -6.0 * sc), 88.0 * sc, c_outer);
-    clipped.circle_filled(anchor + egui::vec2(6.0 * sc, 4.0 * sc), 56.0 * sc, c_mid);
+    let draw_clipped_circle = |center: egui::Pos2, radius: f32, color: egui::Color32| {
+        let steps = 96usize;
+        let mut pts = Vec::with_capacity(steps);
+        for i in 0..steps {
+            let ang = (i as f32 / steps as f32) * std::f32::consts::TAU;
+            let raw = center + egui::vec2(ang.cos() * radius, ang.sin() * radius);
+            let clamped = clamp_pos_to_rounded_rect(raw, inner_rect, inner_rnd);
+            if pts
+                .last()
+                .map(|last: &egui::Pos2| last.distance_sq(clamped) > 0.04)
+                .unwrap_or(true)
+            {
+                pts.push(clamped);
+            }
+        }
+        if pts.len() >= 3 {
+            painter.add(egui::Shape::convex_polygon(
+                pts,
+                color,
+                egui::Stroke::NONE,
+            ));
+        }
+    };
+
+    draw_clipped_circle(anchor + egui::vec2(14.0 * sc, -6.0 * sc), 88.0 * sc, c_outer);
+    draw_clipped_circle(anchor + egui::vec2(6.0 * sc, 4.0 * sc), 56.0 * sc, c_mid);
 }
 
 /// 现代极简双层光晕启停主按钮（采用 egui 原生 SDF 抗锯齿圆与矢量图标，彻底消除多边形锯齿与抠图毛边感）
@@ -919,9 +984,9 @@ pub fn cupertino_button(
     pal: &ThemePalette,
 ) -> bool {
     let text_galley = ui.fonts(|f| f.layout_no_wrap(label.to_string(), cup_font_med(12.0), egui::Color32::WHITE));
-    let icon_pad = if icon.is_some() { 16.0 } else { 0.0 };
-    let w = (text_galley.size().x + icon_pad + 22.0).max(56.0);
-    let h = 30.0;
+    let icon_pad = if icon.is_some() { 18.0 } else { 0.0 };
+    let w = (text_galley.size().x + icon_pad + 26.0).max(60.0);
+    let h = 32.0;
     let sense = if enabled { egui::Sense::click() } else { egui::Sense::hover() };
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, h), sense);
     if enabled && resp.hovered() {
@@ -932,8 +997,8 @@ pub fn cupertino_button(
     let scale = interact_spring_scale(
         ui.ctx(),
         id,
-        enabled && resp.hovered(),
         enabled && resp.is_pointer_button_down_on(),
+        enabled && resp.hovered(),
     );
 
     if ui.is_rect_visible(rect) {
@@ -958,32 +1023,32 @@ pub fn cupertino_button(
                 (fill, txt_c, egui::Stroke::NONE)
             }
             CupBtnStyle::Tinted(c) => {
-                let alpha = if !enabled { 16 } else if active { 64 } else if hovered { 42 } else { 26 };
+                let alpha = if !enabled { 16 } else if active { 56 } else if hovered { 38 } else { 22 };
                 let fill = egui::Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), alpha);
-                let border = egui::Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), if hovered { 110 } else { 70 });
+                let border = egui::Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), if hovered { 105 } else { 64 });
                 let txt_c = if enabled { c } else { pal.text_muted };
-                (fill, txt_c, egui::Stroke::new(1.0_f32, border))
+                (fill, txt_c, egui::Stroke::new(0.9_f32, border))
             }
             CupBtnStyle::Secondary => {
                 let fill = if !enabled {
-                    pal.bg_pill
+                    pal.bg_card
                 } else if active || hovered {
-                    pal.bg_pill_hover
+                    pal.bg_card_hover
                 } else {
-                    pal.bg_pill
+                    pal.bg_card
                 };
                 let border = if hovered { pal.border_hover } else { pal.border };
                 let txt_c = if enabled { pal.text_primary } else { pal.text_muted };
-                (fill, txt_c, egui::Stroke::new(1.0_f32, border))
+                (fill, txt_c, egui::Stroke::new(0.9_f32, border))
             }
         };
 
-        painter.rect(draw_r, 15.0, bg, stroke);
+        painter.rect(draw_r, 16.0, bg, stroke);
 
         let content_w = text_galley.size().x + icon_pad;
         let start_x = draw_r.center().x - content_w * 0.5;
         if let Some(ic) = icon {
-            let ic_center = egui::pos2(start_x + 5.5, draw_r.center().y);
+            let ic_center = egui::pos2(start_x + 6.5, draw_r.center().y);
             draw_cup_icon(painter, ic, ic_center, fg);
         }
         painter.text(

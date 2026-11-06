@@ -97,6 +97,9 @@ pub struct ProfilesMeta {
     /// 深色模式（默认 false 使用 FlClash 清爽亮色 Material You 风格）
     #[serde(default)]
     pub dark_mode: bool,
+    /// 是否记住并自动开启系统代理
+    #[serde(default)]
+    pub sys_proxy_enabled: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -157,6 +160,8 @@ pub struct AppState {
     pub ping_done: usize,
     pub ping_total: usize,
     pub last_ping_done_at: Option<Instant>,
+    pub is_restarting_core: bool,
+    pub last_action_done_at: Option<Instant>,
     pub is_updating_sub: bool,
     pub show_import_dialog: bool,
     pub show_settings_dialog: bool,
@@ -213,6 +218,7 @@ impl AppState {
             hide_timeout: false,
             close_connections: true,
             dark_mode: false,
+            sys_proxy_enabled: false,
         };
 
         let json_path = config_dir.join("profiles.json");
@@ -260,6 +266,8 @@ impl AppState {
             ping_done: 0,
             ping_total: 0,
             last_ping_done_at: None,
+            is_restarting_core: false,
+            last_action_done_at: None,
             is_updating_sub: false,
             show_import_dialog: false,
             show_settings_dialog: false,
@@ -337,6 +345,10 @@ impl AppState {
                 let _ = crate::platform::set_autostart(true);
             } else if crate::platform::check_autostart_enabled() {
                 state.profiles.autostart = true;
+            }
+            if state.profiles.sys_proxy_enabled && !state.is_system_proxy_on {
+                crate::platform::set_kde_proxy(true);
+                state.is_system_proxy_on = crate::platform::check_kde_proxy_enabled();
             }
         }
         state.save_profiles();

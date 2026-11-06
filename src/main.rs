@@ -442,7 +442,10 @@ impl AppRuntime {
 
 impl FutureProxyApp {
     fn set_status(&self, msg: String) {
-        self.state.lock().unwrap().status_msg = msg;
+        let mut app = self.state.lock().unwrap();
+        app.status_msg = msg;
+        app.last_action_done_at = Some(Instant::now());
+        drop(app);
         self.ctx.request_repaint();
     }
 
@@ -496,6 +499,7 @@ impl FutureProxyApp {
                 _ => "规则分流 (Rule)",
             };
             let mut app = state.lock().unwrap();
+            app.last_action_done_at = Some(Instant::now());
             app.status_msg = match res {
                 Ok(()) => format!("✓ 已切换为 {}", mode_cn),
                 Err(e) => format!("✗ 模式切换失败: {}", e),
@@ -677,6 +681,7 @@ impl FutureProxyApp {
             let before_mb = (before.gui_kb + before.core_kb) as f64 / 1024.0;
             let after_mb = (after.gui_kb + after.core_kb) as f64 / 1024.0;
             let freed_mb = (before_mb - after_mb).max(0.0);
+            app.last_action_done_at = Some(Instant::now());
             app.status_msg = if freed_mb >= 0.1 {
                 format!(
                     "✓ 已释放 {:.1} MB 闲置内存（当前占用 {:.1} MB）",
@@ -701,16 +706,26 @@ impl FutureProxyApp {
         let ctx = self.ctx.clone();
         {
             let mut app = state.lock().unwrap();
-            app.status_msg = "↻ 正在重启 Mihomo 内核...".to_string();
+            if app.is_restarting_core {
+                return;
+            }
+            app.is_restarting_core = true;
+            app.last_action_done_at = None;
+            app.status_msg = "↻ 正在重启 Mihomo 内核并重载配置…".to_string();
             app.started_at = Instant::now();
         }
         ctx.request_repaint();
         std::thread::spawn(move || {
-            let cfg = {
+            let started = Instant::now();
+            let (cfg, prefer_sys) = {
                 let app = state.lock().unwrap();
                 let _ = app.write_active_config();
-                app.active_config()
+                (app.active_config(), app.profiles.autostart)
             };
+            let cfg_dir = cfg
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| PathBuf::from("."));
             #[cfg(unix)]
             if systemd_active() {
                 let _ = Command::new("systemctl")
@@ -724,13 +739,32 @@ impl FutureProxyApp {
                     cm.stop();
                 }
                 cm.reset();
+                let _ = cm.ensure_running(&cfg_dir, false, prefer_sys);
             }
+            std::thread::sleep(Duration::from_millis(320));
             let _ = reload_core(&cfg);
             close_all_connections();
             trim_process_memory();
+            let snap = fetch_proxies("", false);
+            let elapsed = started.elapsed();
+            if elapsed < Duration::from_millis(480) {
+                std::thread::sleep(Duration::from_millis(480) - elapsed);
+            }
             let mut app = state.lock().unwrap();
+            app.is_restarting_core = false;
+            app.last_action_done_at = Some(Instant::now());
             app.intranet_ip = detect_intranet_ip();
-            app.status_msg = "✓ Mihomo 内核已重启并重载配置".to_string();
+            if let Some(s) = snap {
+                app.groups = s.groups;
+                app.group_summaries = s.group_summaries;
+                app.group_name = s.group_name;
+                app.current_selected = s.current;
+                app.resolved_node = s.resolved_node;
+                app.resolved_delay = s.resolved_delay;
+                app.nodes = s.nodes;
+                app.is_core_alive = true;
+            }
+            app.status_msg = "✓ Mihomo 内核已重启并重新加载配置".to_string();
             drop(app);
             ctx.request_repaint();
         });
@@ -882,6 +916,7 @@ impl FutureProxyApp {
             };
             let snap = fetch_proxies("", false);
             let mut app = state.lock().unwrap();
+            app.last_action_done_at = Some(Instant::now());
             app.status_msg = msg;
             app.group_picked_by_user = false;
             if let Some(s) = snap {
@@ -1275,11 +1310,14 @@ impl eframe::App for FutureProxyApp {
             let on = check_kde_proxy_enabled();
             let mut app = self.state.lock().unwrap();
             app.is_system_proxy_on = on;
+            app.profiles.sys_proxy_enabled = on;
+            app.save_profiles();
+            app.last_action_done_at = Some(Instant::now());
             app.status_msg = if on == enable {
                 if on {
-                    format!("系统代理已开启 (127.0.0.1:{})", MIXED_PORT)
+                    format!("✓ 系统代理已开启 (127.0.0.1:{})", MIXED_PORT)
                 } else {
-                    "系统代理已关闭".to_string()
+                    "✓ 系统代理已关闭".to_string()
                 }
             } else {
                 "✗ 修改系统代理失败".to_string()

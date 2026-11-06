@@ -646,11 +646,18 @@ pub fn render_more_popover(ctx: &egui::Context, app: &mut AppState, pal: &ThemeP
             let (_, _) = ui.allocate_exact_size(menu_rect.size(), egui::Sense::hover());
             let mp = ui.painter().clone();
 
-            mp.rect_filled(
-                menu_rect.translate(egui::vec2(0.0, 4.0)).expand(2.0),
-                22.0,
-                egui::Color32::from_rgba_unmultiplied(15, 23, 42, if pal.dark { 100 } else { 22 }),
-            );
+            let pop_shadow = egui::epaint::Shadow {
+                offset: egui::vec2(0.0, 6.0),
+                blur: 20.0,
+                spread: 1.0,
+                color: egui::Color32::from_rgba_unmultiplied(
+                    15,
+                    23,
+                    42,
+                    if pal.dark { 110 } else { 32 },
+                ),
+            };
+            mp.add(pop_shadow.as_shape(menu_rect, 22.0));
             mp.rect(
                 menu_rect,
                 22.0,
@@ -1031,30 +1038,50 @@ pub fn render_import_modal(
     egui::Area::new(egui::Id::new("cup_import_sheet"))
         .order(egui::Order::Foreground)
         .fixed_pos(screen_rect.min)
+        .constrain(false)
         .show(ctx, |ui| {
             let (_, bg_resp) = ui.allocate_exact_size(screen_rect.size(), egui::Sense::click());
             ui.painter().rect_filled(
                 screen_rect,
                 0.0,
-                egui::Color32::from_rgba_unmultiplied(0, 0, 0, 120),
+                egui::Color32::from_rgba_unmultiplied(15, 23, 42, if pal.dark { 145 } else { 95 }),
             );
 
-            let sheet_w = (screen_rect.width() - 32.0).clamp(320.0, 460.0);
-            let sheet_h = 276.0;
+            let sheet_w = (screen_rect.width() - 32.0).clamp(340.0, 488.0);
+            let sheet_h = 278.0;
             let sheet_rect =
                 egui::Rect::from_center_size(screen_rect.center(), egui::vec2(sheet_w, sheet_h));
 
             let sp = ui.painter();
-            sp.rect_filled(
-                sheet_rect.translate(egui::vec2(0.0, 8.0)).expand(4.0),
-                18.0,
-                egui::Color32::from_rgba_unmultiplied(0, 0, 0, 80),
-            );
+            let modal_shadow = egui::epaint::Shadow {
+                offset: egui::vec2(0.0, 10.0),
+                blur: 32.0,
+                spread: 1.5,
+                color: egui::Color32::from_rgba_unmultiplied(
+                    15,
+                    23,
+                    42,
+                    if pal.dark { 140 } else { 42 },
+                ),
+            };
+            sp.add(modal_shadow.as_shape(sheet_rect, 16.0));
+            let contact_shadow = egui::epaint::Shadow {
+                offset: egui::vec2(0.0, 2.0),
+                blur: 8.0,
+                spread: 0.0,
+                color: egui::Color32::from_rgba_unmultiplied(
+                    15,
+                    23,
+                    42,
+                    if pal.dark { 90 } else { 22 },
+                ),
+            };
+            sp.add(contact_shadow.as_shape(sheet_rect, 16.0));
             sp.rect(
                 sheet_rect,
                 16.0,
                 pal.bg_popover,
-                egui::Stroke::new(1.0_f32, pal.border_strong),
+                egui::Stroke::new(1.0_f32, pal.border),
             );
 
             let inner = sheet_rect.shrink(20.0);

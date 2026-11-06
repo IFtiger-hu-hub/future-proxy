@@ -658,13 +658,20 @@ pub mod win_os {
             for (i, &ch) in tip.iter().take(127).enumerate() {
                 nid.sz_tip[i] = ch;
             }
-            Shell_NotifyIconW(NIM_ADD, &nid);
+            let mut icon_added = Shell_NotifyIconW(NIM_ADD, &nid) != 0;
+            let mut retry_ticks: u32 = 0;
 
             let mut msg: MSG = std::mem::zeroed();
             while !flags.quit.load(Ordering::SeqCst) {
                 while PeekMessageW(&mut msg, 0, 0, 0, PM_REMOVE) != 0 {
                     TranslateMessage(&msg);
                     DispatchMessageW(&msg);
+                }
+                if !icon_added {
+                    retry_ticks = retry_ticks.wrapping_add(1);
+                    if retry_ticks % 10 == 0 {
+                        icon_added = Shell_NotifyIconW(NIM_ADD, &nid) != 0;
+                    }
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
@@ -1030,17 +1037,19 @@ pub fn systemd_active() -> bool {
 }
 
 #[cfg(windows)]
+fn windows_startup_dir() -> Option<PathBuf> {
+    std::env::var_os("APPDATA")
+        .map(PathBuf::from)
+        .or_else(dirs::data_dir)
+        .map(|p| p.join("Microsoft\\Windows\\Start Menu\\Programs\\Startup"))
+}
+
+#[cfg(windows)]
 pub fn check_autostart_enabled() -> bool {
-    use std::os::windows::process::CommandExt;
-    let task_ok = Command::new("schtasks")
-        .args(["/Query", "/TN", "FutureProxy"])
-        .creation_flags(CREATE_NO_WINDOW)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
+    let vbs_ok = windows_startup_dir()
+        .map(|d| d.join("FutureProxy.vbs").exists() || d.join("Future Proxy.lnk").exists())
         .unwrap_or(false);
-    task_ok || win_os::check_registry_run_autostart()
+    vbs_ok || win_os::check_registry_run_autostart()
 }
 
 #[cfg(unix)]
@@ -1070,51 +1079,47 @@ pub fn set_autostart(enable: bool) -> Result<(), String> {
 pub fn set_autostart(enable: bool) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
 
-    // 始终清理旧版遗留的直接拉起控制台 future-proxy-core.exe 的计划任务（避免开机弹出黑框）
-    let _ = Command::new("schtasks")
-        .args(["/Delete", "/TN", "FutureProxyCore", "/F"])
-        .creation_flags(CREATE_NO_WINDOW)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+    // 清理旧版可能受电源策略/会话限制阻塞的计划任务
+    for tn in ["FutureProxyCore", "FutureProxy"] {
+        let _ = Command::new("schtasks")
+            .args(["/Delete", "/TN", tn, "/F"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
 
     let exe = std::env::current_exe().map_err(|e| format!("无法获取当前程序路径: {}", e))?;
     let exe_str = exe
         .to_string_lossy()
         .trim_start_matches(r"\\?\")
         .to_string();
+    let exe_dir = exe
+        .parent()
+        .map(|d| d.to_string_lossy().trim_start_matches(r"\\?\").to_string())
+        .unwrap_or_default();
     let run_cmd = format!("\"{}\" --tray", exe_str);
 
     if enable {
-        // 优先尝试创建最高权限 (HIGHEST) 登录计划任务（支持 TUN 模式免 UAC 弹窗静默自启）
-        let raw_line = format!(
-            "/Create /TN \"FutureProxy\" /TR \"\\\"{}\\\" --tray\" /SC ONLOGON /RL HIGHEST /F",
-            exe_str
-        );
-        let sch_ok = Command::new("schtasks")
-            .raw_arg(&raw_line)
-            .creation_flags(CREATE_NO_WINDOW)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-
-        if sch_ok {
-            // 计划任务创建成功时，移除注册表 Run 项以防开机重复触发两次
-            let _ = win_os::set_registry_run_autostart(false, "");
-            Ok(())
-        } else {
-            // 普通用户权限（未以管理员运行）时，写入 HKCU\...\Run 注册表开机自启
-            win_os::set_registry_run_autostart(true, &run_cmd)
+        // 1. 写入 Windows 标准启动文件夹脚本 (%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\FutureProxy.vbs)
+        // 由 explorer.exe 在桌面与系统托盘就绪后拉起，且显式指定工作目录并隐藏窗口
+        if let Some(startup_dir) = windows_startup_dir() {
+            let _ = std::fs::create_dir_all(&startup_dir);
+            let vbs_path = startup_dir.join("FutureProxy.vbs");
+            let vbs_content = format!(
+                "Set ws = CreateObject(\"WScript.Shell\")\r\nws.CurrentDirectory = \"{}\"\r\nws.Run \"\"\"{}\"\" --tray\", 0, False\r\n",
+                exe_dir.replace('"', "\"\""),
+                exe_str.replace('"', "\"\"")
+            );
+            let _ = std::fs::write(vbs_path, vbs_content);
         }
+        // 2. 同时写入 HKCU\Software\Microsoft\Windows\CurrentVersion\Run 注册表项，双保险确保自启生效
+        win_os::set_registry_run_autostart(true, &run_cmd)
     } else {
-        let _ = Command::new("schtasks")
-            .args(["/Delete", "/TN", "FutureProxy", "/F"])
-            .creation_flags(CREATE_NO_WINDOW)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+        if let Some(startup_dir) = windows_startup_dir() {
+            let _ = std::fs::remove_file(startup_dir.join("FutureProxy.vbs"));
+            let _ = std::fs::remove_file(startup_dir.join("Future Proxy.lnk"));
+        }
         win_os::set_registry_run_autostart(false, "")
     }
 }

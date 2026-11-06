@@ -38,21 +38,23 @@ chmod +x /tmp/x86_64-w64-mingw32-gcc
 
 echo "==> [2/4] Compiling future-proxy.exe (x86_64-pc-windows-gnu)..."
 cd "$ROOT_DIR"
-PATH="/tmp:$PATH" RUSTFLAGS="-C link-self-contained=no" cargo build --release --target x86_64-pc-windows-gnu
+PATH="/tmp:$PATH" RUSTFLAGS="-C link-self-contained=no" cargo build --release --bin future-proxy --target x86_64-pc-windows-gnu
 "$RUST_BIN_DIR/llvm-strip" "$ROOT_DIR/target/x86_64-pc-windows-gnu/release/future-proxy.exe"
 
-echo "==> [3/4] Assembling Windows 10/11 portable bundle..."
+echo "==> [3/4] Staging Windows runtime payload..."
 mkdir -p "$ROOT_DIR/Future-Proxy"
 cp -f "$ROOT_DIR/target/x86_64-pc-windows-gnu/release/future-proxy.exe" "$ROOT_DIR/Future-Proxy/future-proxy.exe"
 cp -f "$ROOT_DIR/packaging/config.yaml" "$ROOT_DIR/Future-Proxy/config.yaml"
 cp -f "$ROOT_DIR/packaging/country.mmdb" "$ROOT_DIR/Future-Proxy/country.mmdb"
 cp -f "$ROOT_DIR/packaging/geosite.dat" "$ROOT_DIR/Future-Proxy/geosite.dat"
 
-echo "==> [4/4] Creating Future-Proxy-${VERSION}-windows-x86_64.zip..."
-rm -f "$ROOT_DIR"/Future-Proxy-*-windows-x86_64.zip
-cd "$ROOT_DIR"
-python3 -m zipfile -c "$ROOT_DIR/Future-Proxy-${VERSION}-windows-x86_64.zip" Future-Proxy/
+echo "==> [4/4] Compiling standalone GUI installer Future-Proxy-${VERSION}-Windows-x86_64-Setup.exe..."
+rm -f "$ROOT_DIR"/Future-Proxy-*-windows-x86_64.zip "$ROOT_DIR"/Future-Proxy-*-Windows-x86_64-Setup.exe
+touch "$ROOT_DIR/src/bin/setup.rs"
+PATH="/tmp:$PATH" RUSTFLAGS="-C link-self-contained=no" cargo build --release --bin future-proxy-setup --target x86_64-pc-windows-gnu
+"$RUST_BIN_DIR/llvm-strip" "$ROOT_DIR/target/x86_64-pc-windows-gnu/release/future-proxy-setup.exe"
+cp -f "$ROOT_DIR/target/x86_64-pc-windows-gnu/release/future-proxy-setup.exe" "$ROOT_DIR/Future-Proxy-${VERSION}-Windows-x86_64-Setup.exe"
 
 echo "Done!"
-ls -lh "$ROOT_DIR/Future-Proxy/" "$ROOT_DIR/Future-Proxy-${VERSION}-windows-x86_64.zip"
+ls -lh "$ROOT_DIR/Future-Proxy-${VERSION}-Windows-x86_64-Setup.exe"
 

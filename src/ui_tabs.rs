@@ -43,12 +43,12 @@ pub fn render_profiles_tab(
                     ) {
                         app.show_import_dialog = true;
                     }
-                    ui.add_space(6.0);
+                    ui.add_space(8.0);
                     if cupertino_button(
                         ui,
                         "导入 YAML 文件",
                         Some(CupIcon::Doc),
-                        CupBtnStyle::Tinted(pal.primary),
+                        CupBtnStyle::Secondary,
                         true,
                         pal,
                     ) {
