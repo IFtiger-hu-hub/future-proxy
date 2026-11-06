@@ -168,48 +168,10 @@ pub fn request_repaint_slot(egui_ctx: &Mutex<Option<egui::Context>>) {
     }
 }
 
-/// Generate a crisp 32x32 RGBA icon (Cupertino Blue rounded square with white lightning bolt).
+/// High-resolution 128x128 RGBA brand icon (supersampled from 1024x1024).
 pub fn build_brand_rgba_icon() -> (Vec<u8>, u32, u32) {
-    let w = 32usize;
-    let h = 32usize;
-    let mut rgba = vec![0u8; w * h * 4];
-    for y in 0..h {
-        for x in 0..w {
-            let fx = x as f32 + 0.5;
-            let fy = y as f32 + 0.5;
-            let qx = (fx - 16.0).abs() - 7.0;
-            let qy = (fy - 16.0).abs() - 7.0;
-            let dist = (qx.max(0.0).hypot(qy.max(0.0)) + qx.min(qy).max(0.0)) - 7.0;
-            if dist <= 0.5 {
-                let alpha = ((0.5 - dist).clamp(0.0, 1.0) * 255.0) as u8;
-                let in_upper = fy >= 6.5 && fy <= 17.5 && {
-                    let t = (fy - 6.5) / 11.0;
-                    let left_x = 18.5 - t * 8.5;
-                    let right_x = 18.5 - t * 2.5;
-                    fx >= left_x && fx <= right_x
-                };
-                let in_lower = fy >= 14.5 && fy <= 25.5 && {
-                    let t = (fy - 14.5) / 11.0;
-                    let left_x = 16.0 - t * 2.5;
-                    let right_x = 22.0 - t * 8.5;
-                    fx >= left_x && fx <= right_x
-                };
-                let idx = (y * w + x) * 4;
-                if in_upper || in_lower {
-                    rgba[idx] = 255;
-                    rgba[idx + 1] = 255;
-                    rgba[idx + 2] = 255;
-                    rgba[idx + 3] = alpha;
-                } else {
-                    rgba[idx] = 10;
-                    rgba[idx + 1] = 132;
-                    rgba[idx + 2] = 255;
-                    rgba[idx + 3] = alpha;
-                }
-            }
-        }
-    }
-    (rgba, w as u32, h as u32)
+    static ICON_128: &[u8] = include_bytes!("../packaging/icon_128.rgba");
+    (ICON_128.to_vec(), 128, 128)
 }
 
 #[cfg(unix)]
