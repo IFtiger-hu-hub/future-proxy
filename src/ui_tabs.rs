@@ -781,10 +781,14 @@ pub fn render_tools_tab(
             }
 
             let cur_auto = app.profiles.autostart;
+            #[cfg(windows)]
+            let auto_sub = "登录 Windows 桌面时自动在后台系统托盘静默运行";
+            #[cfg(unix)]
+            let auto_sub = "登录桌面时由 systemd 用户服务在后台静默守护运行";
             if draw_setting_row(
                 ui,
                 "开机自动启动",
-                "登录桌面时由 systemd 用户服务在后台静默守护运行",
+                auto_sub,
                 cur_auto,
             ) {
                 let next_auto = !cur_auto;

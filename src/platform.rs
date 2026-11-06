@@ -761,7 +761,11 @@ pub mod win_os {
             if rc != 0 {
                 return Err(format!("无法打开注册表启动项 ({})", rc));
             }
-            let val_name = to_wide("FutureProxyCore");
+            // 清理旧版遗留的键名 FutureProxyCore
+            let old_name = to_wide("FutureProxyCore");
+            let _ = RegDeleteValueW(hkey, old_name.as_ptr());
+
+            let val_name = to_wide("FutureProxy");
             let status = if enable {
                 let wide_val = to_wide(cmd_str);
                 RegSetValueExW(
@@ -792,7 +796,7 @@ pub mod win_os {
             if RegOpenKeyExW(HKEY_CURRENT_USER, subkey.as_ptr(), 0, KEY_READ, &mut hkey) != 0 {
                 return false;
             }
-            let val_name = to_wide("FutureProxyCore");
+            let val_name = to_wide("FutureProxy");
             let mut data_len: u32 = 0;
             let status = RegQueryValueExW(
                 hkey,
@@ -1022,9 +1026,14 @@ pub fn systemd_active() -> bool {
 
 #[cfg(windows)]
 pub fn systemd_active() -> bool {
+    false
+}
+
+#[cfg(windows)]
+pub fn check_autostart_enabled() -> bool {
     use std::os::windows::process::CommandExt;
     let task_ok = Command::new("schtasks")
-        .args(["/Query", "/TN", "FutureProxyCore"])
+        .args(["/Query", "/TN", "FutureProxy"])
         .creation_flags(CREATE_NO_WINDOW)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -1060,45 +1069,52 @@ pub fn set_autostart(enable: bool) -> Result<(), String> {
 #[cfg(windows)]
 pub fn set_autostart(enable: bool) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
-    let config_dir = dirs::config_dir()
-        .or_else(|| dirs::home_dir().map(|h| h.join(".config")))
-        .unwrap_or_else(|| PathBuf::from(".config"))
-        .join("future-proxy");
-    let core_bin = crate::core_api::CoreManager::core_bin();
+
+    // 始终清理旧版遗留的直接拉起控制台 future-proxy-core.exe 的计划任务（避免开机弹出黑框）
+    let _ = Command::new("schtasks")
+        .args(["/Delete", "/TN", "FutureProxyCore", "/F"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+
+    let exe = std::env::current_exe().map_err(|e| format!("无法获取当前程序路径: {}", e))?;
+    let exe_str = exe
+        .to_string_lossy()
+        .trim_start_matches(r"\\?\")
+        .to_string();
+    let run_cmd = format!("\"{}\" --tray", exe_str);
 
     if enable {
-        let tr_cmd = format!("\"{}\" -d \"{}\"", core_bin.display(), config_dir.display());
-        let sch = Command::new("schtasks")
-            .args([
-                "/Create",
-                "/TN",
-                "FutureProxyCore",
-                "/TR",
-                &tr_cmd,
-                "/SC",
-                "ONLOGON",
-                "/RL",
-                "HIGHEST",
-                "/F",
-            ])
+        // 优先尝试创建最高权限 (HIGHEST) 登录计划任务（支持 TUN 模式免 UAC 弹窗静默自启）
+        let raw_line = format!(
+            "/Create /TN \"FutureProxy\" /TR \"\\\"{}\\\" --tray\" /SC ONLOGON /RL HIGHEST /F",
+            exe_str
+        );
+        let sch_ok = Command::new("schtasks")
+            .raw_arg(&raw_line)
             .creation_flags(CREATE_NO_WINDOW)
-            .output();
-        if let Ok(out) = sch {
-            if out.status.success() {
-                let _ = Command::new("schtasks")
-                    .args(["/Run", "/TN", "FutureProxyCore"])
-                    .creation_flags(CREATE_NO_WINDOW)
-                    .status();
-            }
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+
+        if sch_ok {
+            // 计划任务创建成功时，移除注册表 Run 项以防开机重复触发两次
+            let _ = win_os::set_registry_run_autostart(false, "");
+            Ok(())
+        } else {
+            // 普通用户权限（未以管理员运行）时，写入 HKCU\...\Run 注册表开机自启
+            win_os::set_registry_run_autostart(true, &run_cmd)
         }
-        let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("future-proxy.exe"));
-        let run_cmd = format!("\"{}\" --tray", exe.display());
-        win_os::set_registry_run_autostart(true, &run_cmd)
     } else {
         let _ = Command::new("schtasks")
-            .args(["/Delete", "/TN", "FutureProxyCore", "/F"])
+            .args(["/Delete", "/TN", "FutureProxy", "/F"])
             .creation_flags(CREATE_NO_WINDOW)
-            .output();
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
         win_os::set_registry_run_autostart(false, "")
     }
 }

@@ -330,6 +330,15 @@ impl AppState {
         if let Err(e) = state.write_active_config() {
             state.status_msg = e;
         }
+        // Windows 便携版若移动过目录，启动时自动修复注册表/计划任务中的开机自启路径
+        #[cfg(windows)]
+        {
+            if state.profiles.autostart {
+                let _ = crate::platform::set_autostart(true);
+            } else if crate::platform::check_autostart_enabled() {
+                state.profiles.autostart = true;
+            }
+        }
         state.save_profiles();
         state
     }

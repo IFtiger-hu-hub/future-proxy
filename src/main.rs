@@ -1544,7 +1544,10 @@ fn run_gui(rt: &AppRuntime) -> eframe::Result<()> {
 fn shutdown_core_if_needed(rt: &AppRuntime) {
     let app = rt.state.lock().unwrap();
     app.save_profiles();
+    #[cfg(unix)]
     let keep = app.profiles.keep_core_on_exit || app.profiles.autostart || systemd_active();
+    #[cfg(windows)]
+    let keep = false;
     if !keep {
         if app.is_system_proxy_on {
             set_kde_proxy(false);
@@ -1640,6 +1643,13 @@ fn tray_only_main() {
 }
 
 fn main() -> eframe::Result<()> {
+    // 确保开机自启（Windows 默认工作目录为 C:\Windows\System32）时切换回程序所在目录
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let _ = std::env::set_current_dir(dir);
+        }
+    }
+
     #[cfg(windows)]
     std::panic::set_hook(Box::new(|info| {
         let msg = format!("Future Proxy 发生运行时错误:\n{info}");
@@ -1719,6 +1729,9 @@ fn main() -> eframe::Result<()> {
             for _ in 0..5 {
                 crate::platform::win_os::pump_thread_messages();
                 std::thread::sleep(Duration::from_millis(10));
+            }
+            if !rt.state.lock().unwrap().profiles.keep_core_on_exit {
+                break;
             }
             crate::platform::win_os::trim_working_set();
             let guard = rt._wake_mutex.lock().unwrap();

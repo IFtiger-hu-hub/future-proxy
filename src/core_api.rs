@@ -436,6 +436,7 @@ impl CoreManager {
             return String::new();
         }
         // 自启服务已启用时，优先尝试唤醒后台服务；若服务未能启动则平滑回退到直接拉起子进程
+        #[allow(unused_variables)]
         if prefer_systemd {
             #[cfg(unix)]
             {
@@ -452,16 +453,6 @@ impl CoreManager {
                     self.last_spawn = Some(Instant::now());
                     return String::new();
                 }
-            }
-            #[cfg(windows)]
-            {
-                use std::os::windows::process::CommandExt;
-                let _ = Command::new("schtasks")
-                    .args(["/Run", "/TN", "FutureProxyCore"])
-                    .creation_flags(CREATE_NO_WINDOW)
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status();
             }
         }
         // 自己拉起的进程已退出：记录失败
@@ -503,7 +494,10 @@ impl CoreManager {
         let log = std::fs::File::create(config_dir.join("core.log")).ok();
         let bin = Self::core_bin();
         let mut cmd = Command::new(&bin);
-        cmd.arg("-d").arg(config_dir).stdin(Stdio::null());
+        cmd.arg("-d")
+            .arg(config_dir)
+            .current_dir(config_dir)
+            .stdin(Stdio::null());
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -545,6 +539,16 @@ impl CoreManager {
         if let Some(mut c) = self.child.take() {
             let _ = c.kill();
             let _ = c.wait();
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            let _ = Command::new("taskkill")
+                .args(["/F", "/IM", "future-proxy-core.exe", "/T"])
+                .creation_flags(CREATE_NO_WINDOW)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
         }
     }
 }
