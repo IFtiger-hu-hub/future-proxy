@@ -436,28 +436,7 @@ pub fn patch_subscription(raw_yaml: &str, tun: bool) -> String {
 
 pub fn patch_subscription_with_mode(raw_yaml: &str, tun: bool, mode: &str) -> String {
     let raw_yaml = raw_yaml.trim_start_matches('\u{feff}');
-    let mut has_native_dns = false;
-    let mut in_raw_old_patch = false;
-    let mut in_dns_block = false;
     let re_key = regex::Regex::new(r"^([a-zA-Z0-9_-]+)\s*:").unwrap();
-
-    for line in raw_yaml.lines() {
-        if line.starts_with(PATCH_BEGIN) {
-            in_raw_old_patch = true;
-            continue;
-        }
-        if in_raw_old_patch {
-            if line.starts_with(PATCH_END) || line.starts_with("# ========") {
-                in_raw_old_patch = false;
-            }
-            continue;
-        }
-        if let Some(caps) = re_key.captures(line) {
-            in_dns_block = &caps[1] == "dns";
-        } else if in_dns_block && line.trim_start().starts_with("nameserver:") {
-            has_native_dns = true;
-        }
-    }
 
     let override_keys: &[&str] = &[
         "external-controller",
@@ -466,6 +445,7 @@ pub fn patch_subscription_with_mode(raw_yaml: &str, tun: bool, mode: &str) -> St
         "secret",
         "external-ui",
         "tun",
+        "dns",
         "log-level",
         "ipv6",
         "mode",
@@ -489,7 +469,8 @@ pub fn patch_subscription_with_mode(raw_yaml: &str, tun: bool, mode: &str) -> St
     let mut filtered = Vec::new();
     let mut skipping = false;
     let mut in_old_patch = false;
-    let mut in_kept_dns = false;
+    let mut in_rules = false;
+    let mut geosite_cn_injected = false;
 
     for line in raw_yaml.lines() {
         if line.starts_with(PATCH_BEGIN) {
@@ -504,23 +485,40 @@ pub fn patch_subscription_with_mode(raw_yaml: &str, tun: bool, mode: &str) -> St
         }
         if let Some(caps) = re_key.captures(line) {
             let k = &caps[1];
-            skipping = override_keys.contains(&k) || (!has_native_dns && k == "dns");
-            in_kept_dns = has_native_dns && k == "dns";
+            skipping = override_keys.contains(&k);
+            in_rules = k == "rules";
         }
         if !skipping {
-            if in_kept_dns && line.trim_start().starts_with("ipv6:") {
-                let indent_len = line.len() - line.trim_start().len();
-                filtered.push(format!("{}ipv6: false", " ".repeat(indent_len)));
-            } else {
-                filtered.push(line.to_string());
+            if in_rules {
+                let trimmed = line.trim();
+                if let Some(rest) = trimmed.strip_prefix('-') {
+                    let rule_body = rest.trim();
+                    let upper = rule_body.to_ascii_uppercase();
+                    if upper.starts_with("GEOIP,CN")
+                        || upper.starts_with("IP-CIDR,")
+                        || upper.starts_with("IP-CIDR6,")
+                        || upper.starts_with("IP-ASN,")
+                    {
+                        let indent_len = line.len() - line.trim_start().len();
+                        let indent = " ".repeat(indent_len);
+                        if upper.starts_with("GEOIP,CN") && !geosite_cn_injected {
+                            let parts: Vec<&str> = rule_body.split(',').collect();
+                            let target = parts.get(2).copied().unwrap_or("DIRECT").trim();
+                            filtered.push(format!("{}- GEOSITE,cn,{}", indent, target));
+                            geosite_cn_injected = true;
+                        }
+                        if !upper.ends_with(",NO-RESOLVE") {
+                            filtered.push(format!("{}- {},no-resolve", indent, rule_body));
+                            continue;
+                        }
+                    }
+                }
             }
+            filtered.push(line.to_string());
         }
     }
 
-    let fallback_dns = if has_native_dns {
-        String::new()
-    } else {
-        r#"
+    let anti_leak_dns = r#"
 dns:
   enable: true
   ipv6: false
@@ -553,17 +551,20 @@ dns:
   default-nameserver:
     - 223.5.5.5
     - 119.29.29.29
-  nameserver:
-    - https://doh.pub/dns-query
-    - https://dns.alidns.com/dns-query
   proxy-server-nameserver:
-    - https://dns.alidns.com/dns-query
     - https://doh.pub/dns-query
+    - https://dns.alidns.com/dns-query
   direct-nameserver:
     - https://doh.pub/dns-query
-    - https://dns.alidns.com/dns-query"#
-            .to_string()
-    };
+    - https://dns.alidns.com/dns-query
+  nameserver-policy:
+    "geosite:cn,private":
+      - https://doh.pub/dns-query
+      - https://dns.alidns.com/dns-query
+    "+.lan,+.local,+.internal,+.corp,+.intranet,+.home.arpa": system
+  nameserver:
+    - https://1.1.1.1/dns-query
+    - https://8.8.8.8/dns-query"#;
 
     let valid_mode = match mode {
         "global" | "direct" | "rule" => mode,
@@ -645,7 +646,7 @@ sniffer:
         secret = DEFAULT_SECRET,
         mode = valid_mode,
         tun = tun,
-        dns_section = fallback_dns,
+        dns_section = anti_leak_dns,
     );
 
     let injected = inject_smart_groups(&filtered);
@@ -740,14 +741,13 @@ rules:
     }
 
     #[test]
-    fn test_dns_preservation() {
-        let raw_with_dns = r#"dns:
+    fn test_anti_dns_leak_override() {
+        let raw_with_leaky_dns = r#"dns:
   enable: true
   ipv6: true
-  enhanced-mode: fake-ip
-  respect-rules: true
   nameserver:
-    - https://cloudflare-dns.com/dns-query#🔰国外流量
+    - https://doh.pub/dns-query
+    - 119.29.29.29
 proxies:
   - name: "新加坡 01"
     type: ss
@@ -761,11 +761,17 @@ proxy-groups:
     proxies:
       - 新加坡 01
 rules:
+  - IP-CIDR,192.168.0.0/16,DIRECT
+  - GEOIP,CN,DIRECT
   - MATCH,🔰国外流量
 "#;
-        let patched = patch_subscription(raw_with_dns, false);
-        assert!(patched.contains("https://cloudflare-dns.com/dns-query#🔰国外流量"));
+        let patched = patch_subscription(raw_with_leaky_dns, false);
+        assert!(patched.contains("https://1.1.1.1/dns-query"));
+        assert!(patched.contains("nameserver-policy:"));
         assert!(patched.contains("respect-rules: true"));
+        assert!(patched.contains("- GEOSITE,cn,DIRECT"));
+        assert!(patched.contains("- GEOIP,CN,DIRECT,no-resolve"));
+        assert!(patched.contains("- IP-CIDR,192.168.0.0/16,DIRECT,no-resolve"));
         assert!(!patched.contains("\n  ipv6: true"));
     }
 
@@ -833,15 +839,27 @@ rules:
                     }
                 }
             }
-            let active_sub = profiles_dir.join("sub_1793770259.yaml");
-            if active_sub.exists() {
-                let active_cfg_path = cfg_dir.join("config.yaml");
-                let cur_tun = std::fs::read_to_string(&active_cfg_path)
-                    .map(|c| c.contains("tun:\n  enable: true"))
-                    .unwrap_or(false);
-                let raw = std::fs::read_to_string(&active_sub).unwrap();
-                let patched = patch_subscription_with_mode(&raw, cur_tun, "rule");
-                std::fs::write(active_cfg_path, &patched).unwrap();
+            if let Ok(meta_str) = std::fs::read_to_string(cfg_dir.join("profiles.json")) {
+                if let Ok(meta_json) = serde_json::from_str::<serde_json::Value>(&meta_str) {
+                    let active_id = meta_json
+                        .get("active")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("party_1a12b155c45");
+                    let cur_tun = meta_json
+                        .get("tun")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(true);
+                    let cur_mode = meta_json
+                        .get("mode")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("rule");
+                    let active_sub = profiles_dir.join(format!("{}.yaml", active_id));
+                    if active_sub.exists() {
+                        let raw = std::fs::read_to_string(&active_sub).unwrap();
+                        let patched = patch_subscription_with_mode(&raw, cur_tun, cur_mode);
+                        std::fs::write(cfg_dir.join("config.yaml"), &patched).unwrap();
+                    }
+                }
             }
         }
     }
