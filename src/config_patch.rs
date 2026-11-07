@@ -494,19 +494,25 @@ pub fn patch_subscription_with_mode(raw_yaml: &str, tun: bool, mode: &str) -> St
                 if let Some(rest) = trimmed.strip_prefix('-') {
                     let rule_body = rest.trim();
                     let upper = rule_body.to_ascii_uppercase();
-                    if upper.starts_with("GEOIP,CN")
-                        || upper.starts_with("IP-CIDR,")
+                    if upper.starts_with("GEOIP,CN") {
+                        let indent_len = line.len() - line.trim_start().len();
+                        let indent = " ".repeat(indent_len);
+                        let parts: Vec<&str> = rule_body.split(',').collect();
+                        let target = parts.get(2).copied().unwrap_or("DIRECT").trim();
+                        if !geosite_cn_injected {
+                            filtered.push(format!("{}- GEOSITE,cn,{}", indent, target));
+                            geosite_cn_injected = true;
+                        }
+                        // Keep GEOIP,CN resolvable (strip ,no-resolve if present) so unlisted
+                        // domestic .com/.net domains resolve via encrypted remote DoH and match CN IP -> DIRECT
+                        filtered.push(format!("{}- GEOIP,CN,{}", indent, target));
+                        continue;
+                    } else if upper.starts_with("IP-CIDR,")
                         || upper.starts_with("IP-CIDR6,")
                         || upper.starts_with("IP-ASN,")
                     {
                         let indent_len = line.len() - line.trim_start().len();
                         let indent = " ".repeat(indent_len);
-                        if upper.starts_with("GEOIP,CN") && !geosite_cn_injected {
-                            let parts: Vec<&str> = rule_body.split(',').collect();
-                            let target = parts.get(2).copied().unwrap_or("DIRECT").trim();
-                            filtered.push(format!("{}- GEOSITE,cn,{}", indent, target));
-                            geosite_cn_injected = true;
-                        }
                         if !upper.ends_with(",NO-RESOLVE") {
                             filtered.push(format!("{}- {},no-resolve", indent, rule_body));
                             continue;
@@ -563,8 +569,8 @@ dns:
       - https://dns.alidns.com/dns-query
     "+.lan,+.local,+.internal,+.corp,+.intranet,+.home.arpa": system
   nameserver:
-    - https://1.1.1.1/dns-query
-    - https://8.8.8.8/dns-query"#;
+    - https://8.8.8.8/dns-query
+    - https://1.1.1.1/dns-query"#;
 
     let valid_mode = match mode {
         "global" | "direct" | "rule" => mode,
@@ -619,11 +625,11 @@ sniffer:
   enable: true
   parse-pure-ip: true
   force-dns-mapping: true
-  override-destination: true
+  override-destination: false
   sniff:
     HTTP:
       ports: [80, 8080-8880]
-      override-destination: true
+      override-destination: false
     TLS:
       ports: [443, 8443]
     QUIC:
@@ -770,7 +776,9 @@ rules:
         assert!(patched.contains("nameserver-policy:"));
         assert!(patched.contains("respect-rules: true"));
         assert!(patched.contains("- GEOSITE,cn,DIRECT"));
-        assert!(patched.contains("- GEOIP,CN,DIRECT,no-resolve"));
+        assert!(patched.contains("- GEOIP,CN,DIRECT\n"));
+        assert!(!patched.contains("GEOIP,CN,DIRECT,no-resolve"));
+        assert!(patched.contains("override-destination: false"));
         assert!(patched.contains("- IP-CIDR,192.168.0.0/16,DIRECT,no-resolve"));
         assert!(!patched.contains("\n  ipv6: true"));
     }
