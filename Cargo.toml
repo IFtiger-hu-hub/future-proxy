@@ -1,6 +1,6 @@
 [package]
 name = "future-proxy"
-version = "1.0.9"
+version = "1.1.0"
 edition = "2021"
 default-run = "future-proxy"
 
