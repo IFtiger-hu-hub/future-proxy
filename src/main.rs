@@ -1420,91 +1420,64 @@ impl eframe::App for FutureProxyApp {
 }
 
 fn setup_custom_fonts(ctx: &egui::Context) {
+    use std::sync::OnceLock;
+    static CACHED_CJK_BYTES: OnceLock<Option<&'static [u8]>> = OnceLock::new();
+
+    let cjk_bytes = CACHED_CJK_BYTES.get_or_init(|| {
+        let mut reg_candidates: Vec<PathBuf> = Vec::new();
+        #[cfg(windows)]
+        {
+            if let Some(windir) = std::env::var_os("WINDIR") {
+                let fonts_dir = PathBuf::from(windir).join("Fonts");
+                reg_candidates.push(fonts_dir.join("msyh.ttf"));
+                reg_candidates.push(fonts_dir.join("msyh.ttc"));
+                reg_candidates.push(fonts_dir.join("simhei.ttf"));
+            }
+            reg_candidates.push(PathBuf::from("C:\\Windows\\Fonts\\msyh.ttf"));
+            reg_candidates.push(PathBuf::from("C:\\Windows\\Fonts\\msyh.ttc"));
+            reg_candidates.push(PathBuf::from("C:\\Windows\\Fonts\\simhei.ttf"));
+        }
+        reg_candidates.extend([
+            PathBuf::from("/usr/share/fonts/truetype/SourceHanSansCN-Regular.otf"),
+            PathBuf::from("/usr/share/fonts/truetype/NotoSansCJKsc-VF.otf"),
+            PathBuf::from("/usr/share/fonts/truetype/SourceHanSansCN-Normal.otf"),
+            PathBuf::from("/usr/share/fonts/truetype/wqy-zenhei.ttc"),
+        ]);
+        if let Some(data_dir) = dirs::data_local_dir() {
+            reg_candidates.push(data_dir.join("fonts/win/msyh.ttf"));
+        }
+
+        for path in &reg_candidates {
+            if let Ok(data) = std::fs::read(path) {
+                let leaked: &'static [u8] = Box::leak(data.into_boxed_slice());
+                return Some(leaked);
+            }
+        }
+        None
+    });
+
     let mut fonts = egui::FontDefinitions::default();
-    let mut reg_candidates: Vec<PathBuf> = Vec::new();
-    #[cfg(windows)]
-    {
-        if let Some(windir) = std::env::var_os("WINDIR") {
-            let fonts_dir = PathBuf::from(windir).join("Fonts");
-            reg_candidates.push(fonts_dir.join("msyh.ttc"));
-            reg_candidates.push(fonts_dir.join("msyh.ttf"));
-            reg_candidates.push(fonts_dir.join("simhei.ttf"));
-        }
-        reg_candidates.push(PathBuf::from("C:\\Windows\\Fonts\\msyh.ttc"));
-        reg_candidates.push(PathBuf::from("C:\\Windows\\Fonts\\msyh.ttf"));
-        reg_candidates.push(PathBuf::from("C:\\Windows\\Fonts\\simhei.ttf"));
-    }
-    reg_candidates.extend([
-        PathBuf::from("/usr/share/fonts/truetype/SourceHanSansCN-Regular.otf"),
-        PathBuf::from("/usr/share/fonts/truetype/NotoSansCJKsc-VF.otf"),
-        PathBuf::from("/usr/share/fonts/truetype/SourceHanSansCN-Normal.otf"),
-        PathBuf::from("/usr/share/fonts/truetype/wqy-zenhei.ttc"),
-    ]);
-    if let Some(data_dir) = dirs::data_local_dir() {
-        reg_candidates.push(data_dir.join("fonts/win/msyh.ttf"));
-    }
-
-    for path in &reg_candidates {
-        if let Ok(data) = std::fs::read(path) {
-            fonts
-                .font_data
-                .insert("cjk_reg".to_owned(), egui::FontData::from_owned(data));
-            if let Some(vec) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
-                vec.insert(0, "cjk_reg".to_owned());
-            }
-            if let Some(vec) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
-                vec.push("cjk_reg".to_owned());
-            }
-            break;
-        }
-    }
-
-    let mut med_candidates: Vec<PathBuf> = Vec::new();
-    #[cfg(windows)]
-    {
-        if let Some(windir) = std::env::var_os("WINDIR") {
-            let fonts_dir = PathBuf::from(windir).join("Fonts");
-            med_candidates.push(fonts_dir.join("msyhbd.ttc"));
-            med_candidates.push(fonts_dir.join("msyhbd.ttf"));
-            med_candidates.push(fonts_dir.join("msyh.ttc"));
-        }
-        med_candidates.push(PathBuf::from("C:\\Windows\\Fonts\\msyhbd.ttc"));
-        med_candidates.push(PathBuf::from("C:\\Windows\\Fonts\\msyh.ttc"));
-    }
-    med_candidates.extend([
-        PathBuf::from("/usr/share/fonts/truetype/SourceHanSansCN-Medium.otf"),
-        PathBuf::from("/usr/share/fonts/truetype/SourceHanSansCN-Bold.otf"),
-        PathBuf::from("/usr/share/fonts/truetype/SourceHanSansCN-Regular.otf"),
-    ]);
-    for path in &med_candidates {
-        if let Ok(data) = std::fs::read(path) {
-            fonts
-                .font_data
-                .insert("cjk_med".to_owned(), egui::FontData::from_owned(data));
-            let mut fam = vec!["cjk_med".to_owned()];
-            if let Some(prop) = fonts.families.get(&egui::FontFamily::Proportional) {
-                fam.extend(prop.iter().cloned());
-            }
-            fonts
-                .families
-                .insert(egui::FontFamily::Name("Medium".into()), fam);
-            break;
-        }
-    }
-
-    if !fonts
-        .families
-        .contains_key(&egui::FontFamily::Name("Medium".into()))
-    {
-        let fallback = fonts
-            .families
-            .get(&egui::FontFamily::Proportional)
-            .cloned()
-            .unwrap_or_default();
+    if let Some(bytes) = *cjk_bytes {
         fonts
-            .families
-            .insert(egui::FontFamily::Name("Medium".into()), fallback);
+            .font_data
+            .insert("cjk_reg".to_owned(), egui::FontData::from_static(bytes));
+        if let Some(vec) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+            vec.insert(0, "cjk_reg".to_owned());
+        }
+        if let Some(vec) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
+            vec.push("cjk_reg".to_owned());
+        }
     }
+
+    // 复用同一份 CJK 字体数据作为 Medium 族，避免在 Windows 下重复加载第二个 20MB 的 msyhbd.ttc 字体集导致内存翻倍
+    let fallback = fonts
+        .families
+        .get(&egui::FontFamily::Proportional)
+        .cloned()
+        .unwrap_or_default();
+    fonts
+        .families
+        .insert(egui::FontFamily::Name("Medium".into()), fallback);
 
     ctx.set_fonts(fonts);
 }
@@ -1543,6 +1516,11 @@ impl AppRuntimeView {
         let ctx = cc.egui_ctx.clone();
         *self.egui_ctx_slot.lock().unwrap() = Some(ctx.clone());
         self.tray_flags.show.store(false, Ordering::SeqCst);
+        #[cfg(windows)]
+        std::thread::spawn(|| {
+            std::thread::sleep(Duration::from_millis(1200));
+            crate::platform::win_os::trim_working_set();
+        });
         FutureProxyApp {
             state: self.state,
             core: self.core,

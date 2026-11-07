@@ -461,6 +461,7 @@ pub mod win_os {
         fn OpenProcess(dw_desired_access: u32, b_inherit_handle: i32, dw_process_id: u32) -> isize;
         fn CloseHandle(h_object: isize) -> i32;
         fn K32GetProcessMemoryInfo(process: isize, ppsmem_counters: *mut PROCESS_MEMORY_COUNTERS, cb: u32) -> i32;
+        fn K32QueryWorkingSet(process: isize, pv: *mut usize, cb: u32) -> i32;
         fn K32EmptyWorkingSet(h_process: isize) -> i32;
         fn GlobalMemoryStatusEx(lp_buffer: *mut MEMORYSTATUSEX) -> i32;
     }
@@ -780,30 +781,68 @@ pub mod win_os {
         }
     }
 
+    /// 读取进程私有工作集 (Private Working Set, 对齐任务管理器「内存」列及 Linux RssAnon) 与总驻留集 (Working Set / RSS)
     pub fn read_process_mem_kb(pid: Option<u32>) -> (u64, u64) {
         unsafe {
             let handle = match pid {
                 None => GetCurrentProcess(),
                 Some(p) => {
-                    let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, p);
-                    if h == 0 {
-                        return (0, 0);
+                    // PROCESS_QUERY_INFORMATION (0x0400) | PROCESS_VM_READ (0x0010) 供 K32QueryWorkingSet 使用，失败则退回 LIMITED
+                    let h = OpenProcess(0x0410, 0, p);
+                    if h != 0 {
+                        h
+                    } else {
+                        let h2 = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, p);
+                        if h2 == 0 {
+                            return (0, 0);
+                        }
+                        h2
                     }
-                    h
                 }
             };
             let mut pmc: PROCESS_MEMORY_COUNTERS = std::mem::zeroed();
             pmc.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
             let ok = K32GetProcessMemoryInfo(handle, &mut pmc, pmc.cb);
+
+            // 使用 K32QueryWorkingSet 统计非共享物理页 (Shared bit == 0)，即 Windows 任务管理器展示的「专用工作集」
+            let mut priv_ws_kb: u64 = 0;
+            let mut cap: usize = 32768;
+            let mut buf: Vec<usize> = vec![0usize; cap];
+            let mut ws_ok = K32QueryWorkingSet(
+                handle,
+                buf.as_mut_ptr(),
+                (cap * std::mem::size_of::<usize>()) as u32,
+            );
+            if ws_ok == 0 && buf[0] > 0 && buf[0] < 524_288 {
+                cap = buf[0] + 1024;
+                buf.resize(cap, 0);
+                ws_ok = K32QueryWorkingSet(
+                    handle,
+                    buf.as_mut_ptr(),
+                    (cap * std::mem::size_of::<usize>()) as u32,
+                );
+            }
+            if ws_ok != 0 {
+                let count = buf[0].min(buf.len().saturating_sub(1));
+                let mut priv_pages: u64 = 0;
+                for &entry in &buf[1..=count] {
+                    // PSAPI_WORKING_SET_BLOCK: Bit 8 (0x100) 为 Shared 标志位，0 代表进程独占物理页
+                    if (entry & 0x100) == 0 {
+                        priv_pages += 1;
+                    }
+                }
+                priv_ws_kb = priv_pages * 4;
+            }
+
             if pid.is_some() {
                 CloseHandle(handle);
             }
             if ok != 0 {
                 let rss = (pmc.working_set_size / 1024) as u64;
-                let priv_kb = if pmc.pagefile_usage > 0 {
-                    (pmc.pagefile_usage / 1024) as u64
+                let priv_kb = if priv_ws_kb > 0 {
+                    priv_ws_kb
                 } else {
-                    rss
+                    rss.min((pmc.pagefile_usage / 1024) as u64)
                 };
                 (priv_kb, rss)
             } else {
