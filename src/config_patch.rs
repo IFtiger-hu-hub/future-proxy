@@ -167,10 +167,10 @@ pub fn detect_intranet_ip() -> String {
 pub fn is_info_node(name: &str) -> bool {
     let lower = name.to_lowercase();
     [
-        "剩余", "剩餘", "已用", "流量", "到期", "过期", "過期", "有效期", "重置",
-        "官网", "官網", "网址", "網址", "域名", "公告", "套餐", "客服", "群组",
-        "群組", "频道", "頻道", "通知", "订阅", "备用网址", "traffic", "remaining",
-        "expire", "expiry", "reset", "website", "telegram",
+        "剩余", "剩餘", "已用", "剩余流量", "剩餘流量", "已用流量", "总流量", "流量重置", "流量剩余",
+        "到期", "过期", "過期", "有效期", "重置", "官网", "官網", "网址", "網址", "域名",
+        "公告", "套餐", "客服", "群组", "群組", "频道", "頻道", "通知", "订阅", "备用网址",
+        "traffic", "remaining", "expire", "expiry", "reset", "website", "telegram",
     ]
     .iter()
     .any(|k| lower.contains(k))
@@ -333,7 +333,7 @@ const SMART_GROUPS_DEF: &str = r#"  - name: "⚡ 🌍 非港台-自动优选"
     max-failed-times: 3
     include-all: true
     exclude-type: "direct|reject"
-    exclude-filter: "(?i)香港|HK|Hong Kong|台湾|TW|Taiwan|澳门|MO|中国|CN|China|剩余|剩餘|已用|流量|到期|过期|過期|有效期|重置|官网|官網|网址|網址|域名|公告|套餐|客服|群组|群組|频道|頻道|通知|traffic|remaining|expir|reset|website|telegram"
+    exclude-filter: "(?i)香港|HK|Hong Kong|台湾|TW|Taiwan|澳门|MO|中国|CN|China|剩余|剩餘|已用|剩余流量|已用流量|总流量|到期|过期|過期|有效期|重置|官网|官網|网址|網址|域名|公告|套餐|客服|群组|群組|频道|頻道|通知|traffic|remaining|expir|reset|website|telegram"
   - name: "⚡ 🇸🇬 新加坡-自动最优"
     type: url-test
     url: "https://www.gstatic.com/generate_204"
@@ -345,7 +345,7 @@ const SMART_GROUPS_DEF: &str = r#"  - name: "⚡ 🌍 非港台-自动优选"
     include-all: true
     exclude-type: "direct|reject"
     filter: "(?i)新加坡|狮城|SG|Singapore"
-    exclude-filter: "(?i)剩余|剩餘|已用|流量|到期|过期|過期|有效期|重置|官网|官網|网址|網址|公告|套餐|客服|通知|traffic|remaining|expir|reset|website"
+    exclude-filter: "(?i)剩余|剩餘|已用|剩余流量|已用流量|总流量|到期|过期|過期|有效期|重置|官网|官網|网址|網址|公告|套餐|客服|通知|traffic|remaining|expir|reset|website"
   - name: "⚡ 🇯🇵 日本-自动最优"
     type: url-test
     url: "https://www.gstatic.com/generate_204"
@@ -357,7 +357,7 @@ const SMART_GROUPS_DEF: &str = r#"  - name: "⚡ 🌍 非港台-自动优选"
     include-all: true
     exclude-type: "direct|reject"
     filter: "(?i)日本|东京|大阪|埼玉|JP|Japan"
-    exclude-filter: "(?i)剩余|剩餘|已用|流量|到期|过期|過期|有效期|重置|官网|官網|网址|網址|公告|套餐|客服|通知|traffic|remaining|expir|reset|website"
+    exclude-filter: "(?i)剩余|剩餘|已用|剩余流量|已用流量|总流量|到期|过期|過期|有效期|重置|官网|官網|网址|網址|公告|套餐|客服|通知|traffic|remaining|expir|reset|website"
   - name: "⚡ 🇺🇸 美国-自动最优"
     type: url-test
     url: "https://www.gstatic.com/generate_204"
@@ -369,7 +369,7 @@ const SMART_GROUPS_DEF: &str = r#"  - name: "⚡ 🌍 非港台-自动优选"
     include-all: true
     exclude-type: "direct|reject"
     filter: "(?i)美国|波特兰|洛杉矶|西雅图|芝加哥|硅谷|圣何塞|US|United States"
-    exclude-filter: "(?i)剩余|剩餘|已用|流量|到期|过期|過期|有效期|重置|官网|官網|网址|網址|公告|套餐|客服|通知|traffic|remaining|expir|reset|website"
+    exclude-filter: "(?i)剩余|剩餘|已用|剩余流量|已用流量|总流量|到期|过期|過期|有效期|重置|官网|官網|网址|網址|公告|套餐|客服|通知|traffic|remaining|expir|reset|website"
   - name: "⚡ 🇭🇰 香港-自动最优"
     type: url-test
     url: "https://www.gstatic.com/generate_204"
@@ -381,7 +381,7 @@ const SMART_GROUPS_DEF: &str = r#"  - name: "⚡ 🌍 非港台-自动优选"
     include-all: true
     exclude-type: "direct|reject"
     filter: "(?i)香港|HK|Hong Kong"
-    exclude-filter: "(?i)剩余|剩餘|已用|流量|到期|过期|過期|有效期|重置|官网|官網|网址|網址|公告|套餐|客服|通知|traffic|remaining|expir|reset|website""#;
+    exclude-filter: "(?i)剩余|剩餘|已用|剩余流量|已用流量|总流量|到期|过期|過期|有效期|重置|官网|官網|网址|網址|公告|套餐|客服|通知|traffic|remaining|expir|reset|website""#;
 
 pub fn inject_smart_groups(lines: &[String]) -> Vec<String> {
     let mut group_indent = 2usize;
@@ -424,6 +424,262 @@ pub fn inject_smart_groups(lines: &[String]) -> Vec<String> {
             out.push(smart_block.clone());
             inserted_defs = true;
         }
+    }
+
+    normalize_proxy_groups(&out)
+}
+
+/// 标准化修复订阅自带的 `url-test` / `fallback` 策略组：
+/// 1. 将超长 `interval`（如 86400 / 7200）收敛至 300 秒；
+/// 2. 修正残缺测速 URL（如 `http://cp.cloudflare.com` -> 补齐 `/generate_204`）；
+/// 3. 过滤掉 `url-test` / `fallback` 内的“剩余流量/套餐到期/官网”等非代理假节点；
+/// 4. 自动补齐缺失的 `timeout: 2000`、`lazy: true`、`max-failed-times: 3`、`tolerance: 50`。
+fn normalize_proxy_groups(lines: &[String]) -> Vec<String> {
+    let re_top_key = regex::Regex::new(r"^([a-zA-Z0-9_-]+)\s*:").unwrap();
+    let mut result = Vec::with_capacity(lines.len() + 32);
+    let mut i = 0;
+    let mut in_pg = false;
+
+    while i < lines.len() {
+        let line = &lines[i];
+        let trimmed = line.trim();
+
+        if let Some(caps) = re_top_key.captures(line) {
+            let k = &caps[1];
+            in_pg = k == "proxy-groups";
+            result.push(line.clone());
+            i += 1;
+            continue;
+        }
+
+        if !in_pg {
+            result.push(line.clone());
+            i += 1;
+            continue;
+        }
+
+        // 1. 单行内联格式: - { name: 自动选择, type: url-test, ... }
+        if trimmed.starts_with("- {") && trimmed.ends_with('}') {
+            result.push(normalize_inline_proxy_group(line));
+            i += 1;
+            continue;
+        }
+
+        // 2. 多行块格式: 以独立 `-` 或 `- name:` 开始的策略组块
+        if is_new_block_group_start(trimmed) {
+            let mut block = vec![line.clone()];
+            i += 1;
+            while i < lines.len() {
+                let next_line = &lines[i];
+                let next_trimmed = next_line.trim();
+                if re_top_key.is_match(next_line)
+                    || (next_trimmed.starts_with("- {") && next_trimmed.ends_with('}'))
+                    || is_new_block_group_start(next_trimmed)
+                {
+                    break;
+                }
+                block.push(next_line.clone());
+                i += 1;
+            }
+            result.extend(normalize_block_proxy_group(&block));
+            continue;
+        }
+
+        result.push(line.clone());
+        i += 1;
+    }
+
+    result
+}
+
+fn is_new_block_group_start(trimmed: &str) -> bool {
+    if trimmed == "-" {
+        return true;
+    }
+    if let Some(rest) = trimmed.strip_prefix("- ") {
+        let r = rest.trim_start().trim_start_matches(|c| c == '\'' || c == '"');
+        return r.starts_with("name:") || r.starts_with("name :");
+    }
+    false
+}
+
+fn normalize_inline_proxy_group(line: &str) -> String {
+    let re_type = regex::Regex::new(r"(?i)\btype\s*:\s*['\x22]?(url-test|fallback)['\x22]?").unwrap();
+    let Some(caps) = re_type.captures(line) else {
+        return line.to_string();
+    };
+    let group_type = caps[1].to_ascii_lowercase();
+    let is_url_test = group_type == "url-test";
+
+    let mut out = line.to_string();
+
+    // 1. 过滤 proxies: [...] 中的流量/到期/官网假节点
+    let re_proxies = regex::Regex::new(r"(proxies\s*:\s*\[)([^\]]*)(\])").unwrap();
+    if let Some(pcaps) = re_proxies.captures(&out) {
+        let prefix = &pcaps[1];
+        let body = &pcaps[2];
+        let suffix = &pcaps[3];
+        let items: Vec<&str> = body
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect();
+        let filtered_items: Vec<&str> = items
+            .iter()
+            .copied()
+            .filter(|item| {
+                let clean = item.trim_matches(|c| c == '\'' || c == '"');
+                !is_info_node(clean)
+            })
+            .collect();
+        if !filtered_items.is_empty() && filtered_items.len() != items.len() {
+            let replacement = format!("{}{}{}", prefix, filtered_items.join(", "), suffix);
+            out = re_proxies.replace(&out, replacement.as_str()).to_string();
+        }
+    }
+
+    // 2. 修正残缺测速 URL (http://cp.cloudflare.com -> http://cp.cloudflare.com/generate_204)
+    let re_bad_url = regex::Regex::new(r"(url\s*:\s*['\x22]?https?://cp\.cloudflare\.com)(['\x22]?\s*[,}])").unwrap();
+    out = re_bad_url
+        .replace(&out, "${1}/generate_204${2}")
+        .to_string();
+
+    // 3. 收敛超长 interval (> 300s -> 300s)
+    let re_interval = regex::Regex::new(r"\binterval\s*:\s*(\d+)").unwrap();
+    if let Some(icaps) = re_interval.captures(&out) {
+        if let Ok(val) = icaps[1].parse::<u64>() {
+            if val > 300 {
+                out = re_interval.replace(&out, "interval: 300").to_string();
+            }
+        }
+    } else if let Some(pos) = out.rfind('}') {
+        out.insert_str(pos, ", interval: 300");
+    }
+
+    // 4. 补齐缺失的健康检查参数
+    let mut extras = String::new();
+    if !out.contains("timeout:") {
+        extras.push_str(", timeout: 2000");
+    }
+    if !out.contains("lazy:") {
+        extras.push_str(", lazy: true");
+    }
+    if !out.contains("max-failed-times:") {
+        extras.push_str(", max-failed-times: 3");
+    }
+    if is_url_test && !out.contains("tolerance:") {
+        extras.push_str(", tolerance: 50");
+    }
+    if !extras.is_empty() {
+        if let Some(pos) = out.rfind('}') {
+            let before = out[..pos].trim_end();
+            let after = &out[pos..];
+            out = format!("{}{} {}", before, extras, after);
+        }
+    }
+
+    out
+}
+
+fn normalize_block_proxy_group(block: &[String]) -> Vec<String> {
+    // 跳过我们已经注入的 ⚡ 智能策略组
+    if block.iter().any(|l| l.contains("⚡ ")) {
+        return block.to_vec();
+    }
+
+    let re_type = regex::Regex::new(r"^\s*type\s*:\s*['\x22]?(url-test|fallback)['\x22]?\s*$").unwrap();
+    let mut group_type = None;
+    let mut key_indent = String::from("    ");
+
+    for line in block {
+        if let Some(caps) = re_type.captures(line) {
+            group_type = Some(caps[1].to_ascii_lowercase());
+            let ind_len = line.len() - line.trim_start().len();
+            key_indent = " ".repeat(ind_len);
+            break;
+        }
+    }
+
+    let Some(gtype) = group_type else {
+        return block.to_vec();
+    };
+    let is_url_test = gtype == "url-test";
+
+    let re_kv = regex::Regex::new(r"^(\s*)([a-zA-Z0-9_-]+)\s*:\s*(.*)$").unwrap();
+    let mut out = Vec::with_capacity(block.len() + 6);
+    let mut in_proxies_list = false;
+    let mut has_url = false;
+    let mut has_interval = false;
+    let mut has_timeout = false;
+    let mut has_lazy = false;
+    let mut has_max_failed = false;
+    let mut has_tolerance = false;
+
+    for line in block {
+        let trimmed = line.trim();
+        if let Some(caps) = re_kv.captures(line) {
+            let k = &caps[2];
+            let v = caps[3].trim();
+            in_proxies_list = k == "proxies" && v.is_empty();
+            match k {
+                "url" => {
+                    has_url = true;
+                    let clean_v = v.trim_matches(|c| c == '\'' || c == '"');
+                    if clean_v.eq_ignore_ascii_case("http://cp.cloudflare.com")
+                        || clean_v.eq_ignore_ascii_case("https://cp.cloudflare.com")
+                    {
+                        out.push(format!("{}url: 'http://cp.cloudflare.com/generate_204'", key_indent));
+                        continue;
+                    }
+                }
+                "interval" => {
+                    has_interval = true;
+                    if let Ok(val) = v.parse::<u64>() {
+                        if val > 300 {
+                            out.push(format!("{}interval: 300", key_indent));
+                            continue;
+                        }
+                    }
+                }
+                "timeout" => has_timeout = true,
+                "lazy" => has_lazy = true,
+                "max-failed-times" => has_max_failed = true,
+                "tolerance" => has_tolerance = true,
+                _ => {}
+            }
+            out.push(line.clone());
+            continue;
+        }
+
+        if in_proxies_list {
+            if let Some(item) = trimmed.strip_prefix('-') {
+                let node_name = item.trim().trim_matches(|c| c == '\'' || c == '"');
+                if is_info_node(node_name) {
+                    continue;
+                }
+            }
+        }
+
+        out.push(line.clone());
+    }
+
+    if !has_url {
+        out.push(format!("{}url: 'http://www.gstatic.com/generate_204'", key_indent));
+    }
+    if !has_interval {
+        out.push(format!("{}interval: 300", key_indent));
+    }
+    if !has_timeout {
+        out.push(format!("{}timeout: 2000", key_indent));
+    }
+    if !has_lazy {
+        out.push(format!("{}lazy: true", key_indent));
+    }
+    if !has_max_failed {
+        out.push(format!("{}max-failed-times: 3", key_indent));
+    }
+    if is_url_test && !has_tolerance {
+        out.push(format!("{}tolerance: 50", key_indent));
     }
 
     out
@@ -833,6 +1089,23 @@ rules:
                             path.file_name().unwrap().to_string_lossy()
                         ));
                         std::fs::write(&tmp, &patched).unwrap();
+                        let pg_section = patched
+                            .split("\nrules:")
+                            .next()
+                            .unwrap_or(&patched)
+                            .split("\nrule-providers:")
+                            .next()
+                            .unwrap_or(&patched);
+                        assert!(
+                            !pg_section.contains("interval: 86400") && !pg_section.contains("interval: 7200"),
+                            "Profile {:?} proxy-groups still contains excessive interval",
+                            path
+                        );
+                        assert!(
+                            !pg_section.contains("url: 'http://cp.cloudflare.com'"),
+                            "Profile {:?} proxy-groups still contains incomplete cloudflare url",
+                            path
+                        );
                         let out = Command::new("/usr/bin/future-proxy-core")
                             .args(["-t", "-f", tmp.to_str().unwrap()])
                             .output()
