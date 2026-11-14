@@ -150,6 +150,130 @@ pub struct TrayFlags {
     pub quit: AtomicBool,
 }
 
+pub static SYSTEM_SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
+
+#[cfg(unix)]
+extern "C" fn posix_shutdown_signal_handler(_sig: i32) {
+    SYSTEM_SHUTTING_DOWN.store(true, Ordering::SeqCst);
+}
+
+/// 检测系统是否正在关机/注销
+pub fn is_system_shutting_down() -> bool {
+    if SYSTEM_SHUTTING_DOWN.load(Ordering::SeqCst) {
+        return true;
+    }
+    #[cfg(unix)]
+    {
+        if std::path::Path::new("/run/systemd/shutdown/scheduled").exists() {
+            SYSTEM_SHUTTING_DOWN.store(true, Ordering::SeqCst);
+            return true;
+        }
+        false
+    }
+    #[cfg(windows)]
+    {
+        if win_os::query_system_shutting_down() {
+            SYSTEM_SHUTTING_DOWN.store(true, Ordering::SeqCst);
+            return true;
+        }
+        false
+    }
+}
+
+/// 在窗口关闭准备转入后台托盘前，检测桌面会话是否正在注销或系统正在停止
+pub fn is_desktop_session_stopping() -> bool {
+    if is_system_shutting_down() {
+        return true;
+    }
+    #[cfg(unix)]
+    {
+        for args in [
+            &["is-system-running"][..],
+            &["--user", "is-system-running"][..],
+        ] {
+            if let Ok(out) = Command::new("systemctl").args(args).output() {
+                let s = String::from_utf8_lossy(&out.stdout);
+                if s.trim() == "stopping" {
+                    SYSTEM_SHUTTING_DOWN.store(true, Ordering::SeqCst);
+                    return true;
+                }
+            }
+        }
+        if let Ok(out) = Command::new("loginctl")
+            .args(["show-session", "self", "-p", "State", "--value"])
+            .output()
+        {
+            if String::from_utf8_lossy(&out.stdout).trim() == "closing" {
+                SYSTEM_SHUTTING_DOWN.store(true, Ordering::SeqCst);
+                return true;
+            }
+        }
+        false
+    }
+    #[cfg(windows)]
+    {
+        false
+    }
+}
+
+/// 快速无阻塞关闭系统代理（专供系统关机/信号退出时使用，不派生外部命令、不广播阻塞消息）
+pub fn disable_proxy_fast() {
+    #[cfg(unix)]
+    {
+        let cfg = dirs::config_dir()
+            .or_else(|| dirs::home_dir().map(|h| h.join(".config")))
+            .unwrap_or_else(|| PathBuf::from(".config"))
+            .join("kioslaverc");
+        if let Ok(text) = std::fs::read_to_string(&cfg) {
+            if text.contains("ProxyType=1") {
+                let updated = text.replace("ProxyType=1", "ProxyType=0");
+                let _ = std::fs::write(&cfg, updated);
+            }
+        }
+    }
+    #[cfg(windows)]
+    {
+        win_os::disable_system_proxy_registry_only();
+    }
+}
+
+/// 注册操作系统关机/注销信号监听（Linux: SIGTERM/SIGINT/SIGHUP；Windows: SetProcessShutdownParameters + WM_QUERYENDSESSION）
+pub fn install_shutdown_handlers(
+    flags: Arc<TrayFlags>,
+    wake: Arc<Condvar>,
+    egui_ctx: Arc<Mutex<Option<egui::Context>>>,
+) {
+    #[cfg(unix)]
+    {
+        extern "C" {
+            fn signal(sig: i32, handler: extern "C" fn(i32)) -> usize;
+        }
+        unsafe {
+            signal(15, posix_shutdown_signal_handler); // SIGTERM
+            signal(2, posix_shutdown_signal_handler);  // SIGINT
+            signal(1, posix_shutdown_signal_handler);  // SIGHUP
+        }
+        std::thread::spawn(move || {
+            loop {
+                if SYSTEM_SHUTTING_DOWN.load(Ordering::SeqCst) {
+                    flags.quit.store(true, Ordering::SeqCst);
+                    tray_notify(&flags, &wake, &egui_ctx);
+                    disable_proxy_fast();
+                    let _ = std::fs::remove_file(ui_sock_path());
+                    std::thread::sleep(Duration::from_millis(40));
+                    std::process::exit(0);
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        });
+    }
+    #[cfg(windows)]
+    {
+        let _ = (&flags, &wake, &egui_ctx);
+        win_os::configure_fast_process_shutdown();
+    }
+}
+
 /// Wake the main loop (window closed) and/or egui (window open).
 pub fn tray_notify(_flags: &TrayFlags, wake: &Condvar, egui_ctx: &Mutex<Option<egui::Context>>) {
     wake.notify_all();
@@ -400,7 +524,15 @@ pub mod win_os {
             lp_caption: *const u16,
             u_type: u32,
         ) -> i32;
+        fn GetSystemMetrics(n_index: i32) -> i32;
     }
+
+    const WM_CLOSE: u32 = 0x0010;
+    const WM_QUERYENDSESSION: u32 = 0x0011;
+    const WM_QUIT: u32 = 0x0012;
+    const WM_ENDSESSION: u32 = 0x0016;
+    const SM_SHUTTINGDOWN: i32 = 0x2000;
+    const SHUTDOWN_NORETRY: u32 = 0x0000_0001;
 
     type HmenuT = isize;
 
@@ -464,6 +596,8 @@ pub mod win_os {
         fn K32QueryWorkingSet(process: isize, pv: *mut usize, cb: u32) -> i32;
         fn K32EmptyWorkingSet(h_process: isize) -> i32;
         fn GlobalMemoryStatusEx(lp_buffer: *mut MEMORYSTATUSEX) -> i32;
+        fn SetProcessShutdownParameters(dw_level: u32, dw_flags: u32) -> i32;
+        fn ExitProcess(u_exit_code: u32) -> !;
     }
 
     #[link(name = "advapi32")]
@@ -498,6 +632,39 @@ pub mod win_os {
         s.encode_utf16().chain(std::iter::once(0)).collect()
     }
 
+    pub fn configure_fast_process_shutdown() {
+        unsafe {
+            // 0x3FF: 最高优先级尽早接收关机通知；SHUTDOWN_NORETRY: 禁止系统弹出“正在阻止关机/无响应”重试框
+            let _ = SetProcessShutdownParameters(0x3FF, SHUTDOWN_NORETRY);
+        }
+    }
+
+    pub fn query_system_shutting_down() -> bool {
+        unsafe { GetSystemMetrics(SM_SHUTTINGDOWN) != 0 }
+    }
+
+    /// 仅写注册表关闭系统代理（不调用 InternetSetOptionW 广播，防止关机期间 SendMessageTimeout 死锁）
+    pub fn disable_system_proxy_registry_only() {
+        unsafe {
+            let subkey = to_wide("Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings");
+            let mut hkey: isize = 0;
+            if RegOpenKeyExW(HKEY_CURRENT_USER, subkey.as_ptr(), 0, KEY_WRITE, &mut hkey) != 0 {
+                return;
+            }
+            let enable_name = to_wide("ProxyEnable");
+            let enable_val: u32 = 0;
+            RegSetValueExW(
+                hkey,
+                enable_name.as_ptr(),
+                0,
+                REG_DWORD,
+                (&enable_val as *const u32) as *const u8,
+                std::mem::size_of::<u32>() as u32,
+            );
+            RegCloseKey(hkey);
+        }
+    }
+
     struct WinTrayContext {
         flags: Arc<TrayFlags>,
         wake: Arc<Condvar>,
@@ -505,6 +672,20 @@ pub mod win_os {
     }
 
     unsafe extern "system" fn tray_wnd_proc(hwnd: isize, msg: u32, wparam: usize, lparam: isize) -> isize {
+        if msg == WM_QUERYENDSESSION || msg == WM_ENDSESSION || msg == WM_CLOSE {
+            SYSTEM_SHUTTING_DOWN.store(true, Ordering::SeqCst);
+            disable_system_proxy_registry_only();
+            let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const WinTrayContext;
+            if !ptr.is_null() {
+                let ctx = &*ptr;
+                ctx.flags.quit.store(true, Ordering::SeqCst);
+                tray_notify(&ctx.flags, &ctx.wake, &ctx.egui_ctx);
+            }
+            if msg == WM_ENDSESSION && wparam != 0 {
+                ExitProcess(0);
+            }
+            return 1;
+        }
         if msg == WM_TRAYICON {
             let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const WinTrayContext;
             if !ptr.is_null() {
@@ -876,8 +1057,19 @@ pub mod win_os {
     /// `DESTROY_MSG_ID` 被 `window_proc` 立即处理并调用 `DestroyWindow(hwnd)`。
     pub fn pump_thread_messages() {
         unsafe {
+            if GetSystemMetrics(SM_SHUTTINGDOWN) != 0 {
+                SYSTEM_SHUTTING_DOWN.store(true, Ordering::SeqCst);
+                disable_system_proxy_registry_only();
+            }
             let mut msg: MSG = std::mem::zeroed();
             while PeekMessageW(&mut msg, 0, 0, 0, PM_REMOVE) != 0 {
+                if msg.message == WM_QUIT
+                    || msg.message == WM_QUERYENDSESSION
+                    || msg.message == WM_ENDSESSION
+                {
+                    SYSTEM_SHUTTING_DOWN.store(true, Ordering::SeqCst);
+                    disable_system_proxy_registry_only();
+                }
                 TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }

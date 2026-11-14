@@ -29,7 +29,8 @@ use crate::core_api::{
     reload_core, test_delay, test_delay_with_url, test_delays, CoreManager,
 };
 use crate::platform::{
-    build_brand_rgba_icon, check_kde_proxy_enabled, release_instance, request_repaint_slot,
+    build_brand_rgba_icon, check_kde_proxy_enabled, disable_proxy_fast, install_shutdown_handlers,
+    is_desktop_session_stopping, is_system_shutting_down, release_instance, request_repaint_slot,
     set_autostart, set_kde_proxy, spawn_ipc_listener, spawn_system_tray, systemd_active,
     take_single_instance, trim_process_memory, IpcListener, TrayFlags, TrayGuard,
 };
@@ -92,6 +93,12 @@ impl AppRuntime {
         let wake_mutex = Arc::new(Mutex::new(()));
         let egui_ctx_slot: Arc<Mutex<Option<egui::Context>>> = Arc::new(Mutex::new(None));
 
+        install_shutdown_handlers(
+            Arc::clone(&tray_flags),
+            Arc::clone(&wake),
+            Arc::clone(&egui_ctx_slot),
+        );
+
         // Background monitors (once per process). Repaint only if a window is open.
         {
             let state = Arc::clone(&state);
@@ -103,6 +110,9 @@ impl AppRuntime {
                 let mut last_conns = Instant::now() - Duration::from_secs(10);
                 let mut initial_reloaded = false;
                 loop {
+                    if is_system_shutting_down() {
+                        break;
+                    }
                     let alive = ureq::get(&api("/version"))
                         .set("Authorization", &auth())
                         .timeout(Duration::from_millis(400))
@@ -936,11 +946,14 @@ impl FutureProxyApp {
 
 impl eframe::App for FutureProxyApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        if ctx.input(|i| i.viewport().close_requested()) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-        }
-        if self.tray_flags.quit.load(Ordering::SeqCst) {
+        if self.tray_flags.quit.load(Ordering::SeqCst) || is_system_shutting_down() {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
+        if ctx.input(|i| i.viewport().close_requested()) {
+            // 不要在 close_requested 帧内发送 Visible(false)，否则 Wayland 下表面提前 unmap
+            // 会导致帧尾 eglSwapBuffers 永远阻塞等待 frame callback，造成关机/关闭窗口无响应
+            return;
         }
         if self.tray_flags.show.swap(false, Ordering::SeqCst) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
@@ -1558,8 +1571,17 @@ fn run_gui(rt: &AppRuntime) -> eframe::Result<()> {
 }
 
 fn shutdown_core_if_needed(rt: &AppRuntime) {
+    let shutting_down = is_system_shutting_down();
     let app = rt.state.lock().unwrap();
     app.save_profiles();
+    if shutting_down {
+        if app.is_system_proxy_on {
+            disable_proxy_fast();
+        }
+        drop(app);
+        rt.core.lock().unwrap().stop();
+        return;
+    }
     #[cfg(unix)]
     let keep = app.profiles.keep_core_on_exit || app.profiles.autostart || systemd_active();
     #[cfg(windows)]
@@ -1576,6 +1598,10 @@ fn shutdown_core_if_needed(rt: &AppRuntime) {
 #[cfg(unix)]
 fn relaunch_tray_and_exit(listener_slot: &Mutex<Option<IpcListener>>) -> ! {
     release_instance(listener_slot);
+    if is_desktop_session_stopping() {
+        disable_proxy_fast();
+        std::process::exit(0);
+    }
     if let Ok(exe) = std::env::current_exe() {
         let _ = Command::new(exe)
             .arg("--tray")
@@ -1600,6 +1626,11 @@ fn tray_only_main() {
     let wake = Arc::new(Condvar::new());
     let wake_mutex = Arc::new(Mutex::new(()));
     let egui_ctx_slot: Arc<Mutex<Option<egui::Context>>> = Arc::new(Mutex::new(None));
+    install_shutdown_handlers(
+        Arc::clone(&flags),
+        Arc::clone(&wake),
+        Arc::clone(&egui_ctx_slot),
+    );
     let listener_slot = Arc::new(Mutex::new(Some(listener)));
     spawn_ipc_listener(
         Arc::clone(&listener_slot),
@@ -1617,7 +1648,12 @@ fn tray_only_main() {
         let guard = wake_mutex.lock().unwrap();
         let mut guard = guard;
         loop {
-            if flags.quit.load(Ordering::SeqCst) {
+            if flags.quit.load(Ordering::SeqCst) || is_system_shutting_down() {
+                if is_system_shutting_down() {
+                    disable_proxy_fast();
+                    release_instance(&listener_slot);
+                    return;
+                }
                 let keep = {
                     let config_dir = dirs::config_dir()
                         .or_else(|| dirs::home_dir().map(|h| h.join(".config")))
@@ -1647,6 +1683,10 @@ fn tray_only_main() {
         }
         drop(guard);
         release_instance(&listener_slot);
+        if is_desktop_session_stopping() {
+            disable_proxy_fast();
+            return;
+        }
         if let Ok(exe) = std::env::current_exe() {
             let _ = Command::new(exe)
                 .stdin(Stdio::null())
@@ -1695,7 +1735,7 @@ fn main() -> eframe::Result<()> {
     let mut skip_initial_gui = start_in_tray;
 
     loop {
-        if rt.tray_flags.quit.load(Ordering::SeqCst) {
+        if rt.tray_flags.quit.load(Ordering::SeqCst) || is_system_shutting_down() {
             break;
         }
 
@@ -1727,7 +1767,7 @@ fn main() -> eframe::Result<()> {
             *rt.egui_ctx_slot.lock().unwrap() = None;
         }
 
-        if rt.tray_flags.quit.load(Ordering::SeqCst) {
+        if rt.tray_flags.quit.load(Ordering::SeqCst) || is_system_shutting_down() {
             break;
         }
 
@@ -1746,7 +1786,7 @@ fn main() -> eframe::Result<()> {
                 crate::platform::win_os::pump_thread_messages();
                 std::thread::sleep(Duration::from_millis(10));
             }
-            if !rt.state.lock().unwrap().profiles.keep_core_on_exit {
+            if is_system_shutting_down() || !rt.state.lock().unwrap().profiles.keep_core_on_exit {
                 break;
             }
             crate::platform::win_os::trim_working_set();
@@ -1754,7 +1794,7 @@ fn main() -> eframe::Result<()> {
             let mut guard = guard;
             loop {
                 crate::platform::win_os::pump_thread_messages();
-                if rt.tray_flags.quit.load(Ordering::SeqCst) {
+                if rt.tray_flags.quit.load(Ordering::SeqCst) || is_system_shutting_down() {
                     break;
                 }
                 if rt.tray_flags.show.swap(false, Ordering::SeqCst) {

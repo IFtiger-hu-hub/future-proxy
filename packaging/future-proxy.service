@@ -10,6 +10,7 @@ ExecStartPost=/usr/bin/future-proxy-sysproxy on
 ExecStopPost=/usr/bin/future-proxy-sysproxy off
 Restart=on-failure
 RestartSec=3
+TimeoutStopSec=2
 KillMode=process
 
 [Install]

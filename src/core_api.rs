@@ -431,6 +431,9 @@ impl CoreManager {
 
     /// 返回内核错误提示（为空表示正常或正在启动）
     pub fn ensure_running(&mut self, config_dir: &Path, alive: bool, prefer_systemd: bool) -> String {
+        if crate::platform::is_system_shutting_down() {
+            return String::new();
+        }
         if alive {
             self.failures = 0;
             return String::new();
@@ -531,17 +534,19 @@ impl CoreManager {
     }
 
     pub fn stop(&mut self) {
-        // 后台服务托管时不要杀，否则会跟服务抢
-        if systemd_active() {
+        let shutting_down = crate::platform::is_system_shutting_down();
+        if !shutting_down && systemd_active() {
             self.child = None;
             return;
         }
         if let Some(mut c) = self.child.take() {
             let _ = c.kill();
-            let _ = c.wait();
+            if !shutting_down {
+                let _ = c.wait();
+            }
         }
         #[cfg(windows)]
-        {
+        if !shutting_down {
             use std::os::windows::process::CommandExt;
             let _ = Command::new("taskkill")
                 .args(["/F", "/IM", "future-proxy-core.exe", "/T"])
