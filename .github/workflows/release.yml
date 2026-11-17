@@ -1,0 +1,70 @@
+name: Build & Release (Linux & Windows)
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-linux:
+    name: Build Linux (x86_64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Linux GUI dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libssl-dev
+      - name: Run Unit Tests
+        run: cargo test
+      - name: Build Release Binary
+        run: cargo build --release
+      - name: Upload Linux Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: future-proxy-linux-x86_64
+          path: target/release/future-proxy
+
+  build-windows:
+    name: Build Windows 10/11 (x86_64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run Unit Tests
+        run: cargo test
+      - name: Build Release Binary (future-proxy.exe)
+        run: cargo build --release
+      - name: Package Windows Portable Bundle
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/Future-Proxy-Windows
+          Copy-Item target/release/future-proxy.exe dist/Future-Proxy-Windows/
+          Copy-Item packaging/config.yaml dist/Future-Proxy-Windows/
+          Copy-Item packaging/country.mmdb dist/Future-Proxy-Windows/
+          Copy-Item packaging/geosite.dat dist/Future-Proxy-Windows/
+
+          # Download official Mihomo Windows amd64 core as future-proxy-core.exe
+          $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/MetaCubeX/mihomo/releases/latest"
+          $asset = $rel.assets | Where-Object { $_.name -match "mihomo-windows-amd64-compatible-v.*\.zip$" } | Select-Object -First 1
+          if (-not $asset) {
+            $asset = $rel.assets | Where-Object { $_.name -match "mihomo-windows-amd64-v.*\.zip$" } | Select-Object -First 1
+          }
+          if ($asset) {
+            Invoke-WebRequest -Uri $asset.browser_download_url -OutFile mihomo-win.zip
+            Expand-Archive -Path mihomo-win.zip -DestinationPath mihomo-win -Force
+            $exe = Get-ChildItem -Path mihomo-win -Filter "*.exe" | Select-Object -First 1
+            if ($exe) {
+              Copy-Item $exe.FullName dist/Future-Proxy-Windows/future-proxy-core.exe
+            }
+          }
+
+          Compress-Archive -Path dist/Future-Proxy-Windows/* -DestinationPath Future-Proxy-windows-x86_64.zip -Force
+      - name: Upload Windows Portable Bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: Future-Proxy-windows-x86_64
+          path: Future-Proxy-windows-x86_64.zip

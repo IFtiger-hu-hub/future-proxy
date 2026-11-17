@@ -45,6 +45,8 @@ pub struct FutureProxyApp {
     ctx: egui::Context,
     tray_flags: Arc<TrayFlags>,
     egui_ctx_slot: Arc<Mutex<Option<egui::Context>>>,
+    #[allow(dead_code)]
+    listener_slot: Arc<Mutex<Option<IpcListener>>>,
 }
 
 /// Process-wide state: survives egui window close so tray can reopen the UI.
@@ -947,13 +949,36 @@ impl FutureProxyApp {
 impl eframe::App for FutureProxyApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if self.tray_flags.quit.load(Ordering::SeqCst) || is_system_shutting_down() {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            return;
+            #[cfg(unix)]
+            {
+                let shutting_down = is_system_shutting_down();
+                if let Ok(app) = self.state.lock() {
+                    app.save_profiles();
+                    if app.is_system_proxy_on && (shutting_down || !app.profiles.keep_core_on_exit) {
+                        disable_proxy_fast();
+                    }
+                }
+                release_instance(&self.listener_slot);
+                std::process::exit(0);
+            }
+            #[cfg(windows)]
+            {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                return;
+            }
         }
         if ctx.input(|i| i.viewport().close_requested()) {
-            // 不要在 close_requested 帧内发送 Visible(false)，否则 Wayland 下表面提前 unmap
-            // 会导致帧尾 eglSwapBuffers 永远阻塞等待 frame callback，造成关机/关闭窗口无响应
-            return;
+            #[cfg(unix)]
+            {
+                if let Ok(app) = self.state.lock() {
+                    app.save_profiles();
+                }
+                relaunch_tray_and_exit(&self.listener_slot);
+            }
+            #[cfg(windows)]
+            {
+                return;
+            }
         }
         if self.tray_flags.show.swap(false, Ordering::SeqCst) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
@@ -1508,6 +1533,7 @@ fn native_options() -> eframe::NativeOptions {
             .with_min_inner_size([620.0, 480.0])
             .with_icon(Arc::new(icon))
             .with_title("Future Proxy"),
+        vsync: false,
         run_and_return: true,
         ..Default::default()
     }
@@ -1519,6 +1545,7 @@ struct AppRuntimeView {
     core: Arc<Mutex<CoreManager>>,
     tray_flags: Arc<TrayFlags>,
     egui_ctx_slot: Arc<Mutex<Option<egui::Context>>>,
+    listener_slot: Arc<Mutex<Option<IpcListener>>>,
 }
 
 impl AppRuntimeView {
@@ -1540,6 +1567,7 @@ impl AppRuntimeView {
             ctx,
             tray_flags: self.tray_flags,
             egui_ctx_slot: self.egui_ctx_slot,
+            listener_slot: self.listener_slot,
         }
     }
 }
@@ -1550,6 +1578,7 @@ fn run_gui(rt: &AppRuntime) -> eframe::Result<()> {
         core: Arc::clone(&rt.core),
         tray_flags: Arc::clone(&rt.tray_flags),
         egui_ctx_slot: Arc::clone(&rt.egui_ctx_slot),
+        listener_slot: Arc::clone(&rt.listener_slot),
     };
     let boot_fallback = boot.clone();
     let res = eframe::run_native(

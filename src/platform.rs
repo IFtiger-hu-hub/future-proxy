@@ -187,6 +187,22 @@ pub fn is_desktop_session_stopping() -> bool {
     }
     #[cfg(unix)]
     {
+        // KDE Plasma 关机/注销第一阶段会创建 org.kde.Shutdown 或 org.kde.LogoutPrompt slice
+        let uid = nix_uid_fallback();
+        let app_slice = format!(
+            "/sys/fs/cgroup/user.slice/user-{}.slice/user@{}.service/app.slice",
+            uid, uid
+        );
+        if let Ok(entries) = std::fs::read_dir(&app_slice) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let s = name.to_string_lossy();
+                if s.contains("org.kde.Shutdown") || s.contains("org.kde.LogoutPrompt") {
+                    SYSTEM_SHUTTING_DOWN.store(true, Ordering::SeqCst);
+                    return true;
+                }
+            }
+        }
         for args in [
             &["is-system-running"][..],
             &["--user", "is-system-running"][..],
