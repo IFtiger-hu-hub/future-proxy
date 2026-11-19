@@ -800,7 +800,6 @@ dns:
     - "+.pool.ntp.org"
     - "time.*.com"
     - "ntp.*.com"
-    - "stun.*.*"
     - "*.msftconnecttest.com"
     - "*.msftncsi.com"
     - "connectivitycheck.gstatic.com"
@@ -859,7 +858,7 @@ tun:
   stack: gvisor
   device: Mihomo
   mtu: 9000
-  strict-route: false
+  strict-route: true
   auto-route: true
   auto-redirect: false
   auto-detect-interface: true
@@ -898,8 +897,7 @@ sniffer:
     - "+.weixin.qq.com"
     - "+.qq.com"
     - "+.qpic.cn"
-    - "+.qlogo.cn"
-    - "+.stun.*.*"{dns_section}
+    - "+.qlogo.cn"{dns_section}
 {end}"#,
         begin = PATCH_BEGIN,
         end = PATCH_END,
@@ -1037,6 +1035,8 @@ rules:
         assert!(patched.contains("override-destination: false"));
         assert!(patched.contains("- IP-CIDR,192.168.0.0/16,DIRECT,no-resolve"));
         assert!(!patched.contains("\n  ipv6: true"));
+        assert!(patched.contains("strict-route: true"));
+        assert!(!patched.contains("stun.*.*"));
     }
 
     #[test]
