@@ -1175,6 +1175,31 @@ impl eframe::App for FutureProxyApp {
                         }
                         ui.add_space(4.0);
                     }
+
+                    ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
+                        let row_w = ui.available_width();
+                        let (ver_rect, _) =
+                            ui.allocate_exact_size(egui::vec2(row_w, 24.0), egui::Sense::hover());
+                        let vp = ui.painter();
+                        let ver_text = concat!("v", env!("CARGO_PKG_VERSION"));
+                        if drawer_w > 110.0 {
+                            vp.text(
+                                egui::pos2(ver_rect.left() + 12.0, ver_rect.center().y),
+                                egui::Align2::LEFT_CENTER,
+                                ver_text,
+                                cup_font_reg(11.5),
+                                pal.text_muted,
+                            );
+                        } else {
+                            vp.text(
+                                ver_rect.center(),
+                                egui::Align2::CENTER_CENTER,
+                                ver_text,
+                                cup_font_reg(10.0),
+                                pal.text_muted,
+                            );
+                        }
+                    });
                 });
 
             // === Central Panel ===
