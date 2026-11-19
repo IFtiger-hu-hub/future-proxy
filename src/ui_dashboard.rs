@@ -1672,9 +1672,47 @@ fn draw_live_connections_card(
             },
         );
         if t_resp.clicked() {
-            app.dash_conn_tab = t_idx;
+            if is_cur && t_idx == 0 {
+                app.nav_tab = NavTab::Connections;
+            } else {
+                app.dash_conn_tab = t_idx;
+            }
         }
         tab_x += tw + 6.0 * s;
+    }
+
+    // 右上角 "查看全部 ›" 快捷跳转到实时连接完整页面
+    let more_lbl = "查看全部 ›";
+    let more_g = ui.fonts(|f| {
+        f.layout_no_wrap(more_lbl.to_string(), cup_font_med(10.8 * s), pal.text_secondary)
+    });
+    let more_w = more_g.size().x + 14.0 * s;
+    let more_rect = egui::Rect::from_min_size(
+        egui::pos2(lc_rect.right() - pad - more_w, lc_rect.top() + 11.0 * s),
+        egui::vec2(more_w, tab_h),
+    );
+    let more_resp = ui.interact(
+        more_rect,
+        ui.id().with("dash_conn_view_all"),
+        egui::Sense::click(),
+    );
+    if more_resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        lcp.rect_filled(more_rect, tab_h * 0.5, pal.surface_container);
+    }
+    lcp.text(
+        more_rect.center(),
+        egui::Align2::CENTER_CENTER,
+        more_lbl,
+        cup_font_med(10.8 * s),
+        if more_resp.hovered() {
+            pal.primary
+        } else {
+            pal.text_secondary
+        },
+    );
+    if more_resp.clicked() {
+        app.nav_tab = NavTab::Connections;
     }
 
     // 5 列黄金比例坐标：拉宽「出口节点」与「下载」之间的安全间距，彻底杜绝 Singapore 04 与 102.7 KB 粘连
@@ -1749,6 +1787,22 @@ fn draw_live_connections_card(
             let ry = sep_y + row_step * 0.52 + r_i as f32 * row_step;
             if ry + 10.0 > lc_rect.bottom() {
                 break;
+            }
+            let row_box = egui::Rect::from_min_size(
+                egui::pos2(lc_rect.left() + 8.0 * s, ry - row_step * 0.46),
+                egui::vec2(lc_rect.width() - 16.0 * s, row_step * 0.92),
+            );
+            let row_resp = ui.interact(
+                row_box,
+                ui.id().with(("dash_conn_r", r_i)),
+                egui::Sense::click(),
+            );
+            if row_resp.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                lcp.rect_filled(row_box, 6.0 * s, pal.surface_hover);
+            }
+            if row_resp.clicked() {
+                app.nav_tab = NavTab::Connections;
             }
             let src_label = if app.dash_conn_tab == 2 {
                 "DNS"

@@ -513,94 +513,114 @@ pub fn render_connections_tab(ui: &mut egui::Ui, app: &mut AppState, pal: &Theme
                     pal.text_secondary,
                 );
             } else {
-                let max_rows = ((table_h - 54.0) / 36.0).floor().max(5.0) as usize;
-                for (ri, item) in app.live_connections.iter().take(max_rows).enumerate() {
-                    let ry = t_card.top() + 58.0 + ri as f32 * 36.0;
-                    if ry + 14.0 > t_card.bottom() {
-                        break;
-                    }
-                    let badge_r = egui::Rect::from_center_size(
-                        egui::pos2(col_x[0] + 9.0, ry),
-                        egui::vec2(18.0, 18.0),
-                    );
-                    tp.rect_filled(badge_r, 5.0, pal.surface_container);
-                    let ch = item
-                        .source
-                        .chars()
-                        .next()
-                        .unwrap_or('N')
-                        .to_ascii_uppercase();
-                    tp.text(
-                        badge_r.center(),
-                        egui::Align2::CENTER_CENTER,
-                        ch.to_string(),
-                        cup_font_med(9.5),
-                        pal.primary,
-                    );
-                    let src_txt = ellipsize_text(
-                        ui,
-                        &item.source,
-                        cup_font_med(12.0),
-                        (col_x[1] - (col_x[0] + 24.0) - 12.0).max(32.0),
-                    );
-                    tp.text(
-                        egui::pos2(col_x[0] + 24.0, ry),
-                        egui::Align2::LEFT_CENTER,
-                        src_txt,
-                        cup_font_med(12.0),
-                        pal.text_primary,
-                    );
-                    let dst_txt = ellipsize_text(
-                        ui,
-                        &item.target,
-                        cup_font_reg(12.0),
-                        (col_x[2] - col_x[1] - 14.0).max(48.0),
-                    );
-                    tp.text(
-                        egui::pos2(col_x[1], ry),
-                        egui::Align2::LEFT_CENTER,
-                        dst_txt,
-                        cup_font_reg(12.0),
-                        pal.text_secondary,
-                    );
-                    let ext_flag = match_flag(&item.exit);
-                    let mut ext_x = col_x[2];
-                    if !matches!(ext_flag, "DIR" | "AUTO" | "FAIL" | "NET") {
-                        let f_rect = egui::Rect::from_center_size(
-                            egui::pos2(ext_x + 7.0, ry),
-                            egui::vec2(13.0, 9.5),
-                        );
-                        draw_flag_icon(&tp, f_rect, ext_flag, pal);
-                        ext_x += 18.0;
-                    }
-                    let ext_txt = ellipsize_text(
-                        ui,
-                        &format_cupertino_title(&item.exit),
-                        cup_font_reg(12.0),
-                        (col_x[3] - ext_x - 14.0).max(36.0),
-                    );
-                    tp.text(
-                        egui::pos2(ext_x, ry),
-                        egui::Align2::LEFT_CENTER,
-                        ext_txt,
-                        cup_font_reg(12.0),
-                        pal.text_secondary,
-                    );
-                    tp.text(
-                        egui::pos2(col_x[3], ry),
-                        egui::Align2::LEFT_CENTER,
-                        format_bytes(item.download),
-                        cup_font_med(11.5),
-                        pal.text_primary,
-                    );
-                    tp.text(
-                        egui::pos2(col_x[4], ry),
-                        egui::Align2::LEFT_CENTER,
-                        format_bytes(item.upload),
-                        cup_font_med(11.5),
-                        pal.text_secondary,
-                    );
-                }
+                let list_rect = egui::Rect::from_min_max(
+                    egui::pos2(t_card.left(), t_card.top() + 40.0),
+                    egui::pos2(t_card.right(), t_card.bottom() - 6.0),
+                );
+                let mut child_ui = ui.new_child(egui::UiBuilder::new().max_rect(list_rect));
+                egui::ScrollArea::vertical()
+                    .id_salt("live_connections_scroll")
+                    .auto_shrink([false, false])
+                    .show(&mut child_ui, |scroll_ui| {
+                        let row_h = 36.0_f32;
+                        scroll_ui.spacing_mut().item_spacing.y = 0.0;
+                        for (_ri, item) in app.live_connections.iter().enumerate() {
+                            let (row_rect, row_resp) = scroll_ui.allocate_exact_size(
+                                egui::vec2(scroll_ui.available_width(), row_h),
+                                egui::Sense::hover(),
+                            );
+                            let rp = scroll_ui.painter();
+                            if row_resp.hovered() {
+                                rp.rect_filled(
+                                    row_rect.shrink2(egui::vec2(10.0, 1.0)),
+                                    6.0,
+                                    pal.surface_hover,
+                                );
+                            }
+                            let ry = row_rect.center().y;
+                            let badge_r = egui::Rect::from_center_size(
+                                egui::pos2(col_x[0] + 9.0, ry),
+                                egui::vec2(18.0, 18.0),
+                            );
+                            rp.rect_filled(badge_r, 5.0, pal.surface_container);
+                            let ch = item
+                                .source
+                                .chars()
+                                .next()
+                                .unwrap_or('N')
+                                .to_ascii_uppercase();
+                            rp.text(
+                                badge_r.center(),
+                                egui::Align2::CENTER_CENTER,
+                                ch.to_string(),
+                                cup_font_med(9.5),
+                                pal.primary,
+                            );
+                            let src_txt = ellipsize_text(
+                                scroll_ui,
+                                &item.source,
+                                cup_font_med(12.0),
+                                (col_x[1] - (col_x[0] + 24.0) - 12.0).max(32.0),
+                            );
+                            rp.text(
+                                egui::pos2(col_x[0] + 24.0, ry),
+                                egui::Align2::LEFT_CENTER,
+                                src_txt,
+                                cup_font_med(12.0),
+                                pal.text_primary,
+                            );
+                            let dst_txt = ellipsize_text(
+                                scroll_ui,
+                                &item.target,
+                                cup_font_reg(12.0),
+                                (col_x[2] - col_x[1] - 14.0).max(48.0),
+                            );
+                            rp.text(
+                                egui::pos2(col_x[1], ry),
+                                egui::Align2::LEFT_CENTER,
+                                dst_txt,
+                                cup_font_reg(12.0),
+                                pal.text_secondary,
+                            );
+                            let ext_flag = match_flag(&item.exit);
+                            let mut ext_x = col_x[2];
+                            if !matches!(ext_flag, "DIR" | "AUTO" | "FAIL" | "NET") {
+                                let f_rect = egui::Rect::from_center_size(
+                                    egui::pos2(ext_x + 7.0, ry),
+                                    egui::vec2(13.0, 9.5),
+                                );
+                                draw_flag_icon(rp, f_rect, ext_flag, pal);
+                                ext_x += 18.0;
+                            }
+                            let ext_txt = ellipsize_text(
+                                scroll_ui,
+                                &format_cupertino_title(&item.exit),
+                                cup_font_reg(12.0),
+                                (col_x[3] - ext_x - 14.0).max(36.0),
+                            );
+                            rp.text(
+                                egui::pos2(ext_x, ry),
+                                egui::Align2::LEFT_CENTER,
+                                ext_txt,
+                                cup_font_reg(12.0),
+                                pal.text_secondary,
+                            );
+                            rp.text(
+                                egui::pos2(col_x[3], ry),
+                                egui::Align2::LEFT_CENTER,
+                                format_bytes(item.download),
+                                cup_font_med(11.5),
+                                pal.text_primary,
+                            );
+                            rp.text(
+                                egui::pos2(col_x[4], ry),
+                                egui::Align2::LEFT_CENTER,
+                                format_bytes(item.upload),
+                                cup_font_med(11.5),
+                                pal.text_secondary,
+                            );
+                        }
+                    });
             }
         });
 }

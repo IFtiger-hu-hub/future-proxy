@@ -6,18 +6,18 @@
 
 ---
 
-## 📦 下载与安装 (v1.1.0)
+## 📦 下载与安装 (v1.1.1)
 
-前往 [**GitHub Releases (v1.1.0)**](https://github.com/IFtiger-hu-hub/future-proxy/releases/tag/v1.1.0) 下载对应系统安装包：
+前往 [**GitHub Releases (v1.1.1)**](https://github.com/IFtiger-hu-hub/future-proxy/releases/tag/v1.1.1) 下载对应系统安装包：
 
 | 平台 | 安装包文件 | 说明 |
 | :--- | :--- | :--- |
-| **Windows 10 / 11 (x64)** | [`Future-Proxy-1.1.0-Windows-x86_64-Setup.exe`](https://github.com/IFtiger-hu-hub/future-proxy/releases/tag/v1.1.0) | 6 步图形化安装向导（内置主程序、Mihomo 内核、`wintun.dll` 虚拟网卡驱动与 GeoIP/GeoSite 规则库，自动创建桌面/开始菜单快捷方式并配置开机自启） |
-| **Linux (x86_64 RPM)** | [`future-proxy-1.1.0-1.x86_64.rpm`](https://github.com/IFtiger-hu-hub/future-proxy/releases/tag/v1.1.0) | 适用于 openSUSE / Fedora / RHEL 系发行版，内置 `systemd --user` 服务与 `cap_net_admin` 免密 TUN 权限 |
+| **Windows 10 / 11 (x64)** | [`Future-Proxy-1.1.1-Windows-x86_64-Setup.exe`](https://github.com/IFtiger-hu-hub/future-proxy/releases/tag/v1.1.1) | 6 步图形化安装向导（内置主程序、Mihomo 内核、`wintun.dll` 虚拟网卡驱动与 GeoIP/GeoSite 规则库，自动创建桌面/开始菜单快捷方式并配置开机自启） |
+| **Linux (x86_64 RPM)** | [`future-proxy-1.1.1-1.x86_64.rpm`](https://github.com/IFtiger-hu-hub/future-proxy/releases/tag/v1.1.1) | 适用于 openSUSE / Fedora / RHEL 系发行版，内置 `systemd --user` 服务与 `cap_net_admin` 免密 TUN 权限 |
 
 ### Linux 快速安装 / 无损替换升级
 ```bash
-sudo rpm -Uvh --replacepkgs --replacefiles future-proxy-1.1.0-1.x86_64.rpm
+sudo rpm -Uvh --replacepkgs --replacefiles future-proxy-1.1.1-1.x86_64.rpm
 ```
 
 ---
@@ -67,13 +67,13 @@ sudo rpm -Uvh --replacepkgs --replacefiles future-proxy-1.1.0-1.x86_64.rpm
 # 运行单元测试
 cargo test
 
-# 一键编译 Release 并构建 RPM 安装包（输出至项目根目录 future-proxy-1.1.0-1.x86_64.rpm）
+# 一键编译 Release 并构建 RPM 安装包（输出至项目根目录 future-proxy-1.1.1-1.x86_64.rpm）
 bash packaging/build-rpm.sh
 ```
 
 ### 2. 构建 Windows 10/11 图形安装程序 (`Setup.exe`)
 支持在 Linux 环境下通过 MinGW-w64 + Clang/LLD 一键交叉编译生成包含完整载荷与内嵌图标资源的 Windows 安装向导程序：
 ```bash
-# 自动生成 7 层标准 .ico 图标、编译 future-proxy.exe 并打包生成 Future-Proxy-1.1.0-Windows-x86_64-Setup.exe
+# 自动生成 7 层标准 .ico 图标、编译 future-proxy.exe 并打包生成 Future-Proxy-1.1.1-Windows-x86_64-Setup.exe
 bash packaging/build-win.sh
 ```

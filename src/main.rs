@@ -1611,7 +1611,6 @@ fn run_gui(rt: &AppRuntime) -> eframe::Result<()> {
         native_options(),
         Box::new(move |cc| Ok(Box::new(boot.clone().into_app(cc)))),
     );
-    #[cfg(windows)]
     if res.is_err() {
         let mut opts = native_options();
         opts.hardware_acceleration = eframe::HardwareAcceleration::Off;
@@ -1806,17 +1805,15 @@ fn main() -> eframe::Result<()> {
         if should_open_gui {
             if let Err(e) = run_gui(&rt) {
                 eprintln!("Future Proxy GUI error: {e}");
-                #[cfg(windows)]
-                {
-                    let msg = format!("无法初始化图形界面窗口 (OpenGL/WGL):\n{e}");
-                    if let Ok(exe) = std::env::current_exe() {
-                        if let Some(dir) = exe.parent() {
-                            let _ = std::fs::write(dir.join("future-proxy-error.log"), &msg);
-                        }
+                let msg = format!("无法初始化图形界面窗口:\n{e}");
+                if let Ok(exe) = std::env::current_exe() {
+                    if let Some(dir) = exe.parent() {
+                        let _ = std::fs::write(dir.join("future-proxy-error.log"), &msg);
                     }
-                    crate::platform::win_os::show_error_dialog("Future Proxy 图形界面错误", &msg);
-                    break;
                 }
+                #[cfg(windows)]
+                crate::platform::win_os::show_error_dialog("Future Proxy 图形界面错误", &msg);
+                break;
             }
             *rt.egui_ctx_slot.lock().unwrap() = None;
         }
