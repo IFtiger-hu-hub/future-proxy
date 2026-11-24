@@ -7,6 +7,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build-linux:
     name: Build Linux (x86_64)
@@ -14,19 +17,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install Linux GUI dependencies
+      - name: Install Linux GUI & RPM dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libssl-dev
+          sudo apt-get install -y libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libssl-dev rpm
       - name: Run Unit Tests
         run: cargo test --bin future-proxy
-      - name: Build Release Binary
-        run: cargo build --release --bin future-proxy
-      - name: Upload Linux Artifact
+      - name: Build Release RPM
+        run: bash packaging/build-rpm.sh
+      - name: Upload Linux RPM Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: future-proxy-linux-x86_64
-          path: target/release/future-proxy
+          name: future-proxy-linux-rpm
+          path: future-proxy-*.rpm
 
   build-windows:
     name: Build Windows 10/11 (x86_64)
@@ -36,17 +39,34 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Run Unit Tests
         run: cargo test --bin future-proxy
-      - name: Build Release Binary (future-proxy.exe)
-        run: cargo build --release --bin future-proxy
-      - name: Package Windows Portable Bundle
+      - name: Compile Windows PE Icon Resource
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path dist/Future-Proxy-Windows
-          Copy-Item target/release/future-proxy.exe dist/Future-Proxy-Windows/
-          Copy-Item packaging/config.yaml dist/Future-Proxy-Windows/
-          Copy-Item packaging/country.mmdb dist/Future-Proxy-Windows/
-          Copy-Item packaging/geosite.dat dist/Future-Proxy-Windows/
-          Copy-Item packaging/future-proxy.ico dist/Future-Proxy-Windows/
+          $rc = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\rc.exe" -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | Select-Object -First 1
+          if ($rc) {
+            $resPath = Join-Path $PWD "packaging\future-proxy.res"
+            & $rc.FullName /fo $resPath packaging\future-proxy.rc
+            if ($LASTEXITCODE -eq 0 -and (Test-Path $resPath)) {
+              "RUSTFLAGS=-C link-arg=$resPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+              Write-Host "Compiled PE resource: $resPath"
+            } else {
+              Write-Warning "rc.exe exited with code $LASTEXITCODE; continuing without PE icon resource"
+            }
+          } else {
+            Write-Warning "Windows SDK rc.exe not found; continuing without PE icon resource"
+          }
+      - name: Build Release Binary (future-proxy.exe)
+        run: cargo build --release --bin future-proxy
+      - name: Stage Payload & Build Setup Installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path Future-Proxy | Out-Null
+          Copy-Item target/release/future-proxy.exe Future-Proxy/future-proxy.exe -Force
+          Copy-Item packaging/config.yaml Future-Proxy/config.yaml -Force
+          Copy-Item packaging/country.mmdb Future-Proxy/country.mmdb -Force
+          Copy-Item packaging/geosite.dat Future-Proxy/geosite.dat -Force
+          Copy-Item packaging/future-proxy.ico Future-Proxy/future-proxy.ico -Force
 
           # Download official Mihomo Windows amd64 core as future-proxy-core.exe
           $headers = @{ Authorization = "Bearer ${{ secrets.GITHUB_TOKEN }}" }
@@ -55,18 +75,71 @@ jobs:
           if (-not $asset) {
             $asset = $rel.assets | Where-Object { $_.name -match "mihomo-windows-amd64-v.*\.zip$" } | Select-Object -First 1
           }
-          if ($asset) {
-            Invoke-WebRequest -Uri $asset.browser_download_url -OutFile mihomo-win.zip
-            Expand-Archive -Path mihomo-win.zip -DestinationPath mihomo-win -Force
-            $exe = Get-ChildItem -Path mihomo-win -Filter "*.exe" | Select-Object -First 1
-            if ($exe) {
-              Copy-Item $exe.FullName dist/Future-Proxy-Windows/future-proxy-core.exe
-            }
+          if (-not $asset) {
+            throw "Failed to locate Windows amd64 asset in MetaCubeX/mihomo latest release"
           }
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile mihomo-win.zip
+          Expand-Archive -Path mihomo-win.zip -DestinationPath mihomo-win -Force
+          $exe = Get-ChildItem -Path mihomo-win -Filter "*.exe" -Recurse | Select-Object -First 1
+          if (-not $exe) {
+            throw "Failed to extract mihomo.exe from $($asset.name)"
+          }
+          Copy-Item $exe.FullName Future-Proxy/future-proxy-core.exe -Force
 
-          Compress-Archive -Path dist/Future-Proxy-Windows/* -DestinationPath Future-Proxy-windows-x86_64.zip -Force
-      - name: Upload Windows Portable Bundle
+          # Download official Wintun 0.14.1 amd64 driver
+          Invoke-WebRequest -Uri "https://www.wintun.net/builds/wintun-0.14.1.zip" -OutFile wintun.zip
+          Expand-Archive -Path wintun.zip -DestinationPath wintun-tmp -Force
+          $wintunDll = Join-Path "wintun-tmp" "wintun/bin/amd64/wintun.dll"
+          if (-not (Test-Path $wintunDll)) {
+            throw "Failed to locate wintun/bin/amd64/wintun.dll inside wintun-0.14.1.zip"
+          }
+          Copy-Item $wintunDll Future-Proxy/wintun.dll -Force
+
+          # Read version from Cargo.toml and compile standalone setup installer
+          $cargoToml = Get-Content Cargo.toml -Raw
+          if ($cargoToml -match '(?m)^version\s*=\s*"([^"]+)"') {
+            $version = $Matches[1]
+          } else {
+            throw "Failed to parse version from Cargo.toml"
+          }
+          cargo build --release --bin future-proxy-setup
+          if ($LASTEXITCODE -ne 0) {
+            throw "cargo build --release --bin future-proxy-setup failed"
+          }
+          $setupName = "Future-Proxy-$version-Windows-x86_64-Setup.exe"
+          Copy-Item target/release/future-proxy-setup.exe $setupName -Force
+          Get-Item $setupName
+      - name: Upload Windows Setup Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Future-Proxy-windows-x86_64
-          path: Future-Proxy-windows-x86_64.zip
+          name: future-proxy-windows-setup
+          path: Future-Proxy-*-Windows-x86_64-Setup.exe
+
+  release:
+    name: Publish GitHub Release
+    needs: [build-linux, build-windows]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download Release Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+      - name: List Release Assets
+        run: ls -lh release-assets
+      - name: Create or Update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" release-assets/* --clobber
+          else
+            gh release create "$TAG" release-assets/* \
+              --title "Future Proxy $TAG (Linux RPM & Windows Setup)" \
+              --generate-notes
+          fi

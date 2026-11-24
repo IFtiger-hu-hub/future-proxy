@@ -7,7 +7,7 @@ PROJECT_ROOT="$(cd "$DIR/.." && pwd)"
 
 echo "=== 1. 编译 Rust GUI (Release) ==="
 cd "$PROJECT_ROOT"
-cargo build --release
+cargo build --release --bin future-proxy
 
 echo "=== 2. 准备 RPM 构建环境 ==="
 cd "$DIR"

@@ -1,6 +1,7 @@
 %global debug_package %{nil}
 %global __strip /bin/true
 %undefine _missing_build_ids_terminate_build
+%{!?_userunitdir: %global _userunitdir /usr/lib/systemd/user}
 
 Name:           future-proxy
 Version:        1.1.1
