@@ -16,7 +16,7 @@ mkdir -p rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
 echo "=== 3. 收集打包资源 ==="
 cp "$PROJECT_ROOT/target/release/future-proxy" rpmbuild/SOURCES/
 cp "$DIR"/config.yaml "$DIR"/country.mmdb "$DIR"/geosite.dat \
-   "$DIR"/future-proxy.desktop "$DIR"/future-proxy.svg "$DIR"/mihomo \
+   "$DIR"/future-proxy.desktop "$DIR"/future-proxy.svg "$DIR"/future-proxy.png "$DIR"/mihomo \
    "$DIR"/future-proxy-sysproxy "$DIR"/future-proxy.service \
    rpmbuild/SOURCES/
 cp "$DIR"/future-proxy.spec rpmbuild/SPECS/

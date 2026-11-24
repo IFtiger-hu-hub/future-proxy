@@ -327,7 +327,22 @@ impl ksni::Tray for ProxyTray {
         "future-proxy".into()
     }
     fn icon_name(&self) -> String {
-        "future-proxy".into()
+        String::new()
+    }
+    fn icon_pixmap(&self) -> Vec<ksni::Icon> {
+        let (rgba, w, h) = build_brand_rgba_icon();
+        let mut argb = Vec::with_capacity(rgba.len());
+        for px in rgba.chunks_exact(4) {
+            argb.push(px[3]);
+            argb.push(px[0]);
+            argb.push(px[1]);
+            argb.push(px[2]);
+        }
+        vec![ksni::Icon {
+            width: w as i32,
+            height: h as i32,
+            data: argb,
+        }]
     }
     fn title(&self) -> String {
         "Future Proxy".into()

@@ -43,6 +43,7 @@ pub struct FutureProxyApp {
     state: Arc<Mutex<AppState>>,
     core: Arc<Mutex<CoreManager>>,
     ctx: egui::Context,
+    brand_tex: egui::TextureHandle,
     tray_flags: Arc<TrayFlags>,
     egui_ctx_slot: Arc<Mutex<Option<egui::Context>>>,
     #[allow(dead_code)]
@@ -1041,10 +1042,17 @@ impl eframe::App for FutureProxyApp {
                         if drawer_w > 110.0 {
                             let logo_r = egui::Rect::from_center_size(
                                 egui::pos2(hdr_rect.left() + 18.0, hdr_rect.center().y),
-                                egui::vec2(24.0, 24.0),
+                                egui::vec2(28.0, 28.0),
                             );
-                            hp.rect_filled(logo_r, 7.0, pal.primary);
-                            draw_cup_icon(&hp, CupIcon::Bolt, logo_r.center(), egui::Color32::WHITE);
+                            hp.image(
+                                self.brand_tex.id(),
+                                logo_r,
+                                egui::Rect::from_min_max(
+                                    egui::pos2(0.0, 0.0),
+                                    egui::pos2(1.0, 1.0),
+                                ),
+                                egui::Color32::WHITE,
+                            );
                             let txt_alpha = ((drawer_w - 110.0) / 48.0).clamp(0.0, 1.0);
                             let brand_col = egui::Color32::from_rgba_unmultiplied(
                                 pal.text_primary.r(),
@@ -1521,26 +1529,37 @@ fn setup_custom_fonts(ctx: &egui::Context) {
 
     let mut fonts = egui::FontDefinitions::default();
     if let Some(bytes) = *cjk_bytes {
+        fonts.font_data.remove("Hack");
+        fonts.font_data.remove("Ubuntu-Light");
         fonts
             .font_data
             .insert("cjk_reg".to_owned(), egui::FontData::from_static(bytes));
-        if let Some(vec) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
-            vec.insert(0, "cjk_reg".to_owned());
+        let mut chain = vec!["cjk_reg".to_owned()];
+        for fb in ["NotoEmoji-Regular", "emoji-icon-font"] {
+            if fonts.font_data.contains_key(fb) {
+                chain.push(fb.to_owned());
+            }
         }
-        if let Some(vec) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
-            vec.push("cjk_reg".to_owned());
-        }
+        fonts
+            .families
+            .insert(egui::FontFamily::Proportional, chain.clone());
+        fonts
+            .families
+            .insert(egui::FontFamily::Monospace, chain.clone());
+        fonts
+            .families
+            .insert(egui::FontFamily::Name("Medium".into()), chain);
+    } else {
+        // 复用同一份 CJK 字体数据作为 Medium 族，避免在 Windows 下重复加载第二个 20MB 的 msyhbd.ttc 字体集导致内存翻倍
+        let fallback = fonts
+            .families
+            .get(&egui::FontFamily::Proportional)
+            .cloned()
+            .unwrap_or_default();
+        fonts
+            .families
+            .insert(egui::FontFamily::Name("Medium".into()), fallback);
     }
-
-    // 复用同一份 CJK 字体数据作为 Medium 族，避免在 Windows 下重复加载第二个 20MB 的 msyhbd.ttc 字体集导致内存翻倍
-    let fallback = fonts
-        .families
-        .get(&egui::FontFamily::Proportional)
-        .cloned()
-        .unwrap_or_default();
-    fonts
-        .families
-        .insert(egui::FontFamily::Name("Medium".into()), fallback);
 
     ctx.set_fonts(fonts);
 }
@@ -1579,17 +1598,27 @@ impl AppRuntimeView {
         let dark = self.state.lock().unwrap().profiles.dark_mode;
         apply_app_theme(&cc.egui_ctx, &ThemePalette::new(dark));
         let ctx = cc.egui_ctx.clone();
+        let (brand_rgba, brand_w, brand_h) = build_brand_rgba_icon();
+        let brand_img = egui::ColorImage::from_rgba_unmultiplied(
+            [brand_w as usize, brand_h as usize],
+            &brand_rgba,
+        );
+        let brand_tex = ctx.load_texture(
+            "future_proxy_brand_logo",
+            brand_img,
+            egui::TextureOptions::LINEAR,
+        );
         *self.egui_ctx_slot.lock().unwrap() = Some(ctx.clone());
         self.tray_flags.show.store(false, Ordering::SeqCst);
-        #[cfg(windows)]
         std::thread::spawn(|| {
             std::thread::sleep(Duration::from_millis(1200));
-            crate::platform::win_os::trim_working_set();
+            trim_process_memory();
         });
         FutureProxyApp {
             state: self.state,
             core: self.core,
             ctx,
+            brand_tex,
             tray_flags: self.tray_flags,
             egui_ctx_slot: self.egui_ctx_slot,
             listener_slot: self.listener_slot,

@@ -1,87 +1,20 @@
 #!/usr/bin/env python3
-"""Generate 100% Microsoft-standard multi-size Windows .ico (BMP DIB for <=128px, PNG for 256px) and 128x128 raw RGBA."""
+"""Generate 100% Microsoft-standard multi-size Windows .ico (BMP DIB for <=128px, PNG for 256px), 128x128 raw RGBA, 256x256 PNG, and SVG from packaging/brand-icon.png."""
+import base64
 import io
 import struct
 from pathlib import Path
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image
 
 ROOT = Path(__file__).resolve().parent
 
 
-def make_master_icon(size: int = 1024) -> Image.Image:
-    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-
-    # 1. Soft drop shadow under squircle
-    shadow = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    sdraw = ImageDraw.Draw(shadow)
-    pad = int(size * 0.075)
-    radius = int(size * 0.225)
-    sdraw.rounded_rectangle(
-        [pad, pad + int(size * 0.025), size - pad, size - pad + int(size * 0.025)],
-        radius=radius,
-        fill=(10, 35, 90, 115),
-    )
-    shadow = shadow.filter(ImageFilter.GaussianBlur(int(size * 0.028)))
-    img = Image.alpha_composite(img, shadow)
-
-    # 2. Gradient squircle body (#3898FF -> #0A84FF -> #1258E4)
-    grad = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    gpx = grad.load()
-    for y in range(pad, size - pad):
-        ty = (y - pad) / max(1, (size - 2 * pad))
-        for x in range(pad, size - pad):
-            tx = (x - pad) / max(1, (size - 2 * pad))
-            t = 0.65 * ty + 0.35 * tx
-            r = int(56 * (1.0 - t) + 18 * t)
-            g = int(152 * (1.0 - t) + 88 * t)
-            b = int(255 * (1.0 - t) + 228 * t)
-            gpx[x, y] = (r, g, b, 255)
-
-    mask = Image.new("L", (size, size), 0)
-    mdraw = ImageDraw.Draw(mask)
-    mdraw.rounded_rectangle([pad, pad, size - pad, size - pad], radius=radius, fill=255)
-
-    squircle = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    squircle.paste(grad, (0, 0), mask)
-
-    # Subtle inner border highlight
-    bdraw = ImageDraw.Draw(squircle)
-    bdraw.rounded_rectangle(
-        [
-            pad + int(size * 0.006),
-            pad + int(size * 0.006),
-            size - pad - int(size * 0.006),
-            size - pad - int(size * 0.006),
-        ],
-        radius=radius - int(size * 0.006),
-        outline=(255, 255, 255, 78),
-        width=max(2, int(size * 0.012)),
-    )
-    img = Image.alpha_composite(img, squircle)
-
-    # 3. Subtle lightning glow
-    bolt_pts = [
-        (size * 0.565, size * 0.195),
-        (size * 0.275, size * 0.545),
-        (size * 0.485, size * 0.545),
-        (size * 0.435, size * 0.805),
-        (size * 0.725, size * 0.455),
-        (size * 0.515, size * 0.455),
-    ]
-    bolt_shadow = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    bsdraw = ImageDraw.Draw(bolt_shadow)
-    shifted_pts = [(x, y + size * 0.018) for (x, y) in bolt_pts]
-    bsdraw.polygon(shifted_pts, fill=(8, 35, 110, 125))
-    bolt_shadow = bolt_shadow.filter(ImageFilter.GaussianBlur(int(size * 0.02)))
-    img = Image.alpha_composite(img, bolt_shadow)
-
-    # 4. Crisp white lightning bolt
-    bolt_layer = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    ldraw = ImageDraw.Draw(bolt_layer)
-    ldraw.polygon(bolt_pts, fill=(255, 255, 255, 255))
-    img = Image.alpha_composite(img, bolt_layer)
-
-    return img
+def load_master_icon(size: int = 1024) -> Image.Image:
+    master_path = ROOT / "brand-icon.png"
+    master = Image.open(master_path).convert("RGBA")
+    if master.size != (size, size):
+        master = master.resize((size, size), Image.Resampling.LANCZOS)
+    return master
 
 
 def encode_dib_frame(im: Image.Image) -> bytes:
@@ -170,7 +103,7 @@ def build_standard_ico(master: Image.Image, out_path: Path) -> None:
 
 
 def main() -> None:
-    master = make_master_icon(1024)
+    master = load_master_icon(1024)
 
     ico_path = ROOT / "future-proxy.ico"
     build_standard_ico(master, ico_path)
@@ -179,7 +112,25 @@ def main() -> None:
     rgba_path = ROOT / "icon_128.rgba"
     rgba_path.write_bytes(icon_128.tobytes("raw", "RGBA"))
 
-    print(f"Generated {ico_path} ({ico_path.stat().st_size} bytes) and {rgba_path} ({rgba_path.stat().st_size} bytes)")
+    png_256 = master.resize((256, 256), Image.Resampling.LANCZOS)
+    png_path = ROOT / "future-proxy.png"
+    png_256.save(png_path, format="PNG", optimize=True)
+
+    b64_png = base64.b64encode(png_path.read_bytes()).decode("ascii")
+    svg_path = ROOT / "future-proxy.svg"
+    svg_path.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">\n'
+        f'  <image width="256" height="256" href="data:image/png;base64,{b64_png}"/>\n'
+        '</svg>\n',
+        encoding="utf-8",
+    )
+
+    print(
+        f"Generated {ico_path} ({ico_path.stat().st_size} bytes), "
+        f"{rgba_path} ({rgba_path.stat().st_size} bytes), "
+        f"{png_path} ({png_path.stat().st_size} bytes), "
+        f"{svg_path} ({svg_path.stat().st_size} bytes)"
+    )
 
 
 if __name__ == "__main__":

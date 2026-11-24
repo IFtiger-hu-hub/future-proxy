@@ -18,6 +18,7 @@ Source5:        country.mmdb
 Source6:        geosite.dat
 Source7:        future-proxy-sysproxy
 Source8:        future-proxy.service
+Source9:        future-proxy.png
 
 BuildArch:      x86_64
 Requires:       glibc, libcap-progs, curl
@@ -30,6 +31,7 @@ Zero external runtime dependencies. Stores all user profiles safely in ~/.config
 mkdir -p %{buildroot}%{_bindir}
 mkdir -p %{buildroot}%{_datadir}/applications
 mkdir -p %{buildroot}%{_datadir}/icons/hicolor/scalable/apps
+mkdir -p %{buildroot}%{_datadir}/icons/hicolor/256x256/apps
 mkdir -p %{buildroot}%{_datadir}/future-proxy
 mkdir -p %{buildroot}%{_userunitdir}
 
@@ -39,6 +41,7 @@ install -m 755 %{SOURCE7} %{buildroot}%{_bindir}/future-proxy-sysproxy
 
 install -m 644 %{SOURCE2} %{buildroot}%{_datadir}/applications/future-proxy.desktop
 install -m 644 %{SOURCE3} %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/future-proxy.svg
+install -m 644 %{SOURCE9} %{buildroot}%{_datadir}/icons/hicolor/256x256/apps/future-proxy.png
 
 install -m 644 %{SOURCE4} %{buildroot}%{_datadir}/future-proxy/default-config.yaml
 install -m 644 %{SOURCE5} %{buildroot}%{_datadir}/future-proxy/country.mmdb
@@ -71,5 +74,6 @@ fi
 %{_bindir}/future-proxy-sysproxy
 %{_datadir}/applications/future-proxy.desktop
 %{_datadir}/icons/hicolor/scalable/apps/future-proxy.svg
+%{_datadir}/icons/hicolor/256x256/apps/future-proxy.png
 %{_datadir}/future-proxy/
 %{_userunitdir}/future-proxy.service
